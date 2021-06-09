@@ -1,0 +1,2 @@
+#+TITLE: MCFA
+#+SUBTITLE:  Mixtures of Common Factor Analyzers with missing data
