@@ -31,7 +31,7 @@ if len(tf.config.list_physical_devices("GPU")):
     tf.config.experimental.set_memory_growth(device=gpu[0], enable=True)
 
 # Eager execution is good for debugging tensorflow but slow
-tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(False)
 
 
 class MCFA:
@@ -200,6 +200,7 @@ class MCFA:
                 fn=lambda t: -self.log_likelihood_incomplete(t),
                 elems=d,
                 dtype=tf.float32,
+                parallel_iterations=self.batch_size,
             )
 
         # Adam iteration
