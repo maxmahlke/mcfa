@@ -10,7 +10,7 @@ import os
 import numpy as np
 import pandas as pd
 import scipy
-import sklearn
+from sklearn import decomposition, mixture
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tqdm import tqdm
@@ -31,7 +31,7 @@ if len(tf.config.list_physical_devices("GPU")):
     tf.config.experimental.set_memory_growth(device=gpu[0], enable=True)
 
 # Eager execution is good for debugging tensorflow but slow
-tf.config.run_functions_eagerly(False)
+tf.config.run_functions_eagerly(True)
 
 
 class MCFA:
@@ -122,7 +122,7 @@ class MCFA:
         # Attribute for convenient access
         self.clusters = tf.argmax(self.tau, axis=1)
 
-    def train_model(self):
+    def _train_model(self):
         """Perform stochastic gradient descent to optimize the model parameters."""
 
         # ------
@@ -136,22 +136,15 @@ class MCFA:
         data_training = data_0[~split]
         data_validation = data_0[split]
 
-        self.training_subsets = (
+        self.training_set = (
             tf.data.Dataset.from_tensor_slices(data_training)
             .shuffle(len(data_training), reshuffle_each_iteration=True)
-            .repeat()
             .batch(self.batch_size, num_parallel_calls=tf.data.AUTOTUNE)
             .prefetch(tf.data.AUTOTUNE)
         )
 
         # The validation set does not need to be shuffled, and we can pass is as a single batch
-        self.validation_subsets = (
-            tf.data.Dataset.from_tensor_slices(data_validation)
-            .repeat()
-            .batch(len(data_validation), num_parallel_calls=tf.data.AUTOTUNE)
-            .prefetch(tf.data.AUTOTUNE)
-        )
-
+        self.validation_set = tf.convert_to_tensor(data_validation)
         # ------
         # Training
 
@@ -162,45 +155,31 @@ class MCFA:
         # And train
         self.__optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
 
-        for step, batch_x in enumerate(
-            tqdm(self.training_subsets.take(self.n_epochs + 1))
-        ):
+        for epoch in tqdm(range(self.n_epochs), desc="Training ", unit="epoch"):
 
-            training_batch_loss = []
-            validation_batch_loss = []
+            for batch in self.training_set:
+                loss = self.__train_step(batch)
+                self.loss_training.append(tf.reduce_mean(loss))
 
-            # Each subset with unique missingness mask is passed separately
-            # for subset in self.training_subsets:
+                # ll_training = tf.map_fn(
+                #     fn=lambda t: -self.log_likelihood_incomplete(t),
+                #     elems=self.validation_set,
+                #     dtype=tf.float32,
+                # )
+                # self.loss_validation.append(tf.reduce_mean(ll_training))
 
-            # Each subset contains the data points and the corresponding missingness mask
-            # in batches
-            # print(f"Num training subsets: {len(self.training_subsets)}")
-            training_batch_loss.append(tf.reduce_mean(self.__train_step(batch_x)))
-
-            # Now compute the loss over the validation set
-            # for subset in self.validation_subsets:
-
-            # Each subset contains the data points and the corresponding missingness mask
-            #     for d in subset:
-            #         validation_batch_loss.append(
-            #             tf.reduce_mean(
-            #                 -self.log_likelihood_incomplete(
-            #                     d
-            #                 )  # the loss is the average negative log likelihood
-            #             )
-            #         )
-
-            # # Record the loss over this training epoch
-            # self.training_loss.append(tf.reduce_mean(training_batch_loss))
-            # self.validation_loss.append(tf.reduce_mean(validation_batch_loss))
-
-            # # Check convergence
-            # if epoch > 10:
-            #     if np.mean(self.validation_loss[-10:-5]) <= np.mean(
-            #         self.validation_loss[-5:]
-            #     ):
-            #         progress.set_description("Converged")
-            # break
+            # Check convergence
+            if epoch > 2 * self.converge_epochs:
+                if np.mean(
+                    self.validation_loss[
+                        -2 * self.converge_epochs : self.converge_epochs
+                    ]
+                ) <= np.mean(
+                    self.validation_loss[-self.converge_epochs :]
+                    * (1 + self.converge_perc / 100)
+                ):
+                    progress.set_description("Converged ")
+                    break
 
     @tf.function
     def __train_step(self, d):
@@ -217,24 +196,18 @@ class MCFA:
         with tf.GradientTape() as tape:
             # the gradient tape saves all the step that needs
             # to be saved for automatic differentiation
-
-            # try iterating over points in batch here
-
             loss = tf.map_fn(
                 fn=lambda t: -self.log_likelihood_incomplete(t),
                 elems=d,
                 dtype=tf.float32,
             )
-            # loss = -self.log_likelihood_incomplete(
-            #     d
-            # )  # the loss is the negative log likelihood
 
         # Adam iteration
         gradients = tape.gradient(loss, self.theta)
         self.__optimizer.apply_gradients(zip(gradients, self.theta))
         return loss
 
-    def initialize_model(self):
+    def _initialize_model(self):
         """Initialize the latent space and cluster properties."""
 
         # mu is initialized on the observed data per feature
@@ -263,7 +236,7 @@ class MCFA:
 
         # PCA on the complete data for the latent factors
         Y_complete = self.Y[~np.isnan(self.Y).any(axis=1)]
-        pca = sklearn.decomposition.PCA(n_components=self.n_factors)
+        pca = decomposition.PCA(n_components=self.n_factors)
 
         # Initial values of factor scores
         self.Z = pca.fit_transform(Y_complete)
@@ -281,7 +254,7 @@ class MCFA:
         the initialized latent space."""
 
         # GMM on PCA loadings for cluster initialisation
-        mix = sklearn.mixture.GaussianMixture(
+        mix = mixture.GaussianMixture(
             n_components=self.n_components, covariance_type="full", random_state=17
         )
         mix.fit(self.Z)
@@ -313,6 +286,7 @@ class MCFA:
             The log-likelihood of the observation.
         """
 
+        print("LL")
         obs = tf.squeeze(obs)
         # m is mask of missing values. We only need the first entry
         # m = tf.squeeze(tf.boolean_mask(obs == 0))  # tf.squeeze(m[0])
