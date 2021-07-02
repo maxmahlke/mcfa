@@ -59,7 +59,6 @@ class MCFA:
         frac_validation=0.1,
         learning_rate=3e-4,
         converge_epochs=10,
-        converge_perc=1,
         batch_size=32,
     ):
         """Initialize the model parameters and train them with the passed data.
@@ -77,9 +76,6 @@ class MCFA:
             The learning rate passed to the gradient descent optimizer. Default is 3e-4.
         converge_epochs : int
             The amount of epochs over which to average the loss function in the convergence criterion.
-        converge_perc : float
-            Maximum change in percent of loss function over 'converge_epochs' epochs for it to be considered
-            as converged.
         batch_size : int
             Batch size of training subsets to use during SGD. Larger is faster but less fine.
         """
@@ -88,7 +84,6 @@ class MCFA:
         self.n_epochs = int(n_epochs)
         self.frac_validation = float(frac_validation)
         self.learning_rate = float(learning_rate)
-        self.converge_perc = float(converge_perc)
         self.converge_epochs = int(converge_epochs)
         self.batch_size = int(batch_size)
 
@@ -313,9 +308,7 @@ class MCFA:
                     self.loss_validation[
                         -2 * self.converge_epochs : -self.converge_epochs
                     ]
-                ) <= np.mean(self.loss_validation[-self.converge_epochs :]) * (
-                    1 + self.converge_perc / 100
-                ):
+                ) <= np.mean(self.loss_validation[-self.converge_epochs :]):
                     progress.set_description("Converged ")
                     break
 

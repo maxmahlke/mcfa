@@ -81,8 +81,8 @@ def baek_2010_section_5(dropout=0.0):
     model.fit(
         data,
         n_epochs=500,
-        learning_rate=1e-4,
-        frac_validation=0.1,
+        learning_rate=3e-4,
+        frac_validation=0.15,
         converge_epochs=10,
         batch_size=4,
     )

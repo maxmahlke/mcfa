@@ -1,2 +1,71 @@
 #+TITLE: MCFA
 #+SUBTITLE:  Mixtures of Common Factor Analyzers with missing data
+
+This ~python~ package implements the _Mixtures of Common Factor Analyzers_ model
+introduced by [[https://ieeexplore.ieee.org/document/5184847][Baek+ 2010.]] It uses [[https://www.tensorflow.org/][tensorflow]] to implement the stochastic
+gradient descent, which allows for model training without prior imputation of
+missing data. The interface resembles the [[https://scikit-learn.org/stable/][sklearn]] model API.
+
+* Examples
+
+** 3D-Gaussian distribution
+
+#+attr_html: :alt  :align left :class img
+[[gfx/complete_case_data_space.png][Complete Case - Data Space]]
+
+** 3D-Gaussian distribution with missing data
+
+* Install
+
+#+begin_src shell
+$ pip install mcfa
+#+end_src
+
+* Usage
+
+** Training
+
+*** Model Parameters
+
+The model contains six trainable parameters.
+
+*** Parameter Initialization
+
+
+*** Convergence of Loss function
+
+A simple loss function convergence criterion is implemented: If the difference between the loss value averaged over the past ~converge_epochs~ (default is 10) and the current loss is within ~converge_perc~ (default is 1) percent, it is considered to have converged.
+
+*** GPU vs CPU
+
+#+begin_src python
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+#+end_src
+
+*** Validation Set
+
+*** Training speed
+
+~n_epochs~, ~batch_size~
+
+Filled with all-zero rows. If your dataset contains all-zero rows, these are ignored during training.
+
+** Clustering
+
+~model.tau~, ~model.clusters~
+model.compute_cluster_moments()
+model.impute()
+
+* Limitations
+
+No unittests, Model parameter initialization requires some complete rows.
+
+Limited initialzation of parameters.
+
+* Other implementations of MCFA
+
+- [[https://ieeexplore.ieee.org/document/5184847][Baek+ 2010]] [~R~]
+- [[https://github.com/andycasey/mcfa][Casey+ 2019]] [~python~]. The difference to this implementation is the use of
+  the EM-algorithm instead of gradient descent and the imputation of the missing
+  values before the model training. Our implementation does not offer as many
+  initialization routines for the lower space loadings and factors.
