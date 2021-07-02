@@ -12,7 +12,15 @@ missing data. The interface resembles the [[https://scikit-learn.org/stable/][sk
 
 #+html: <p align="center"><img src="gfx/complete_case_data_space.png" /></p>
 
+#+html: <p align="center"><img src="gfx/complete_case_latent_space.png" /></p>
+
+#+html: <p align="center"><img src="gfx/complete_case_loss.png" widht=300 /></p>
+
 ** 3D-Gaussian distribution with missing data
+
+#+html: <p align="center"><img src="gfx/missing_case_data_space.png" /></p>
+
+#+html: <p align="center"><img src="gfx/missing_case_latent_space.png" /></p>
 
 * Install
 
