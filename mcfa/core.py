@@ -37,6 +37,8 @@ tf.config.run_functions_eagerly(False)
 class MCFA:
     """Mixture of Common Factor Analyzers model implementation."""
 
+    # ------
+    # Model API functions
     def __init__(self, n_components, n_factors):
         """Initialize the MCFA model instance.
 
@@ -90,6 +92,18 @@ class MCFA:
         self.converge_epochs = int(converge_epochs)
         self.batch_size = int(batch_size)
 
+        # Quick tests of the dataset
+        if not np.all(self.Y):
+            print(
+                "The dataset contains elements which are equal to zero. Zero is used to flag missing values. "
+                "This value will be ignored during the training."
+            )
+        if not any(np.all(~np.isnan(self.Y), axis=1)):
+            print(
+                "The dataset does not contain a complete row of observations. Initialization with PCA will not work. "
+                "Consider looking into PPCA for initialization."
+            )
+
         # Initialize the clustering model
         self._initialize_model()
 
@@ -117,97 +131,14 @@ class MCFA:
 
         # Compute responsibility matrix
         self.tau = np.zeros((len(self.Y), self.n_components))
-        self.tau[i, :] = self.__cluster_incomplete(sample, np.isfinite(sample))
+        for i, sample in enumerate(Y):
+            self.tau[i, :] = self._cluster_incomplete(sample, np.isfinite(sample))
 
         # Attribute for convenient access
         self.clusters = tf.argmax(self.tau, axis=1)
 
-    def _train_model(self):
-        """Perform stochastic gradient descent to optimize the model parameters."""
-
-        # ------
-        # Split data into training and validation sets
-        split = np.random.rand(self.N) < self.frac_validation
-
-        # Fill in NaNs for fast training. The filled-in values are ignored by the SGD.
-        data_0 = self.Y.copy()
-        data_0[np.isnan(data_0)] = 0
-
-        data_training = data_0[~split]
-        data_validation = data_0[split]
-
-        self.training_set = (
-            tf.data.Dataset.from_tensor_slices(data_training)
-            .shuffle(len(data_training), reshuffle_each_iteration=True)
-            .batch(self.batch_size, num_parallel_calls=tf.data.AUTOTUNE)
-            .prefetch(tf.data.AUTOTUNE)
-        )
-
-        # The validation set does not need to be shuffled, and we can pass is as a single batch
-        self.validation_set = tf.convert_to_tensor(data_validation)
-        # ------
-        # Training
-
-        # Record the loss of the training and the validation set during training
-        self.loss_training = []
-        self.loss_validation = []
-
-        # And train
-        self.__optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
-
-        for epoch in tqdm(range(self.n_epochs), desc="Training ", unit="epoch"):
-
-            for batch in self.training_set:
-                loss = self.__train_step(batch)
-                self.loss_training.append(tf.reduce_mean(loss))
-
-                # ll_training = tf.map_fn(
-                #     fn=lambda t: -self.log_likelihood_incomplete(t),
-                #     elems=self.validation_set,
-                #     dtype=tf.float32,
-                # )
-                # self.loss_validation.append(tf.reduce_mean(ll_training))
-
-            # Check convergence
-            if epoch > 2 * self.converge_epochs:
-                if np.mean(
-                    self.validation_loss[
-                        -2 * self.converge_epochs : self.converge_epochs
-                    ]
-                ) <= np.mean(
-                    self.validation_loss[-self.converge_epochs :]
-                    * (1 + self.converge_perc / 100)
-                ):
-                    progress.set_description("Converged ")
-                    break
-
-    @tf.function
-    def __train_step(self, d):
-        """Execute a gradient-descent step.
-
-        Parameters
-        ==========
-        d : np.ndarray
-            The observation[s] to train the model on.
-        m : np.ndarray
-            Array containing the missingness pattern of d. Must be
-            the same for each row of d.
-        """
-        with tf.GradientTape() as tape:
-            # the gradient tape saves all the step that needs
-            # to be saved for automatic differentiation
-            loss = tf.map_fn(
-                fn=lambda t: -self.log_likelihood_incomplete(t),
-                elems=d,
-                dtype=tf.float32,
-                parallel_iterations=self.batch_size,
-            )
-
-        # Adam iteration
-        gradients = tape.gradient(loss, self.theta)
-        self.__optimizer.apply_gradients(zip(gradients, self.theta))
-        return loss
-
+    # ------
+    # Model initialization functions
     def _initialize_model(self):
         """Initialize the latent space and cluster properties."""
 
@@ -215,10 +146,10 @@ class MCFA:
         self.mu = np.nanmean(self.Y, axis=0).reshape([self.p])
 
         # Initialize the latent space
-        self.initialize_by_pca()
+        self._initialize_by_pca()
 
         # Initialize the cluster components
-        self.initialize_by_gmm()
+        self._initialize_by_gmm()
 
         # Define the model variables using the init values
         self.pi = tf.Variable(self.pi, dtype=tf.float32, name="pi")
@@ -231,7 +162,7 @@ class MCFA:
         # Create list of trainable parameters for gradient descent
         self.theta = [self.Xi, self.pi, self.W, self.Omega, self.Psi, self.mu]
 
-    def initialize_by_pca(self):
+    def _initialize_by_pca(self):
         """Initialize the latent space parameters W and Psi with PCA
         on the complete-case data."""
 
@@ -250,7 +181,7 @@ class MCFA:
             pca.noise_variance_.astype(np.float32)
         ) * tf.ones([self.p])
 
-    def initialize_by_gmm(self):
+    def _initialize_by_gmm(self):
         """Initialize the cluster parameters pi, xi, and omega using GMM in
         the initialized latent space."""
 
@@ -270,8 +201,149 @@ class MCFA:
         self.pi = np.log(mix.weights_ + 0.01)
         self.Xi = mix.means_.reshape((self.n_components, self.n_factors))
 
+    def _split_datasets(self):
+        """Splits the input data into training and validation subsets, each containing batches
+        of constant size and with equal missingness pattern among observations in a single batch.
+        """
+
+        split = np.random.rand(self.N) < self.frac_validation
+
+        data_training = self.Y[~split]
+        data_validation = self.Y[split]
+
+        # Now we create the subsets of equal missingness patterns for each dataset
+        for i, data in enumerate([data_training, data_validation]):
+
+            # The datasets for training cannot contain NaNs, so we fill them with 0
+            # These will be filtered out later with the missingness masks
+            data_0 = data.copy()
+            data_0[np.isnan(data_0)] = 0
+
+            # Missingness patterns are differentiated by hash functions
+            missing = pd.DataFrame(data=np.isfinite(data))
+
+            missing["hash"] = missing.apply(
+                lambda row: hash("".join([str(col) for col in row])), axis=1
+            )
+            missing = missing.reset_index()
+
+            # Build list of data subsets with equal missingness pattern.
+            for j, hash_ in enumerate(set(missing["hash"])):
+
+                # Create subset with the same missingness pattern
+                data_batch = data_0[missing.loc[missing.hash == hash_].index, :]
+
+                # Pad them with all zero observations to the correct batch size
+                # This allows to build a single Dataset, which is much faster than training
+                # with multiple datasets
+                if len(data_batch) % self.batch_size != 0:
+                    data_batch = np.vstack(
+                        (
+                            data_batch,
+                            np.zeros(
+                                (
+                                    self.batch_size - len(data_batch) % self.batch_size,
+                                    self.p,
+                                )
+                            ),
+                        )
+                    )
+
+                # Stack the batchs ontop of each other to construct a dataset
+                subsets = data_batch if j == 0 else np.vstack([subsets, data_batch])
+
+            if i == 0:
+                data_training = subsets
+            else:
+                data_validation = subsets
+
+        # Construct the tf.data.Dataset instances from the input data
+        self.training_set = (
+            tf.data.Dataset.from_tensor_slices(data_training)
+            .batch(self.batch_size, num_parallel_calls=tf.data.AUTOTUNE)
+            .prefetch(tf.data.AUTOTUNE)
+        )
+
+        # The validation set does not need to be shuffled, and we can pass is as a single batch
+        self.validation_set = (
+            tf.data.Dataset.from_tensor_slices(data_validation)
+            .batch(self.batch_size, num_parallel_calls=tf.data.AUTOTUNE)
+            .prefetch(tf.data.AUTOTUNE)
+        )
+
+    # ------
+    # Model training functions
+    def _train_model(self):
+        """Perform stochastic gradient descent to optimize the model parameters."""
+
+        # Split into training:validation
+        self._split_datasets()
+
+        # ------
+        # Training
+
+        # Record the loss of the training and the validation set during training
+        self.loss_training = []
+        self.loss_validation = []
+
+        # And train
+        self._optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+
+        progress = tqdm(range(self.n_epochs), desc="Training ", unit="epoch")
+        for epoch in progress:
+
+            # LL per dataset and training batch
+            ll_train = []
+            ll_valid = []
+
+            for batch_training in self.training_set:
+                loss_training = self._train_step(batch_training)
+                ll_train.append(tf.reduce_mean(loss_training))
+
+            for batch_validation in self.validation_set:
+                loss_validation = -self._log_likelihood_incomplete(batch_validation)
+                ll_valid.append(tf.reduce_mean(loss_validation))
+
+            self.loss_training.append(tf.reduce_mean(ll_train))
+            self.loss_validation.append(tf.reduce_mean(ll_valid))
+
+            # Check convergence
+            if epoch > 2 * self.converge_epochs:
+                if np.mean(
+                    self.loss_validation[
+                        -2 * self.converge_epochs : -self.converge_epochs
+                    ]
+                ) <= np.mean(self.loss_validation[-self.converge_epochs :]) * (
+                    1 + self.converge_perc / 100
+                ):
+                    progress.set_description("Converged ")
+                    break
+
     @tf.function
-    def log_likelihood_incomplete(self, obs):
+    def _train_step(self, batch):
+        """Execute a gradient-descent step.
+
+        Parameters
+        ==========
+        batch : tf.data.Dataset
+            The observation[s] to train the model on. Same missingness pattern between
+            the observations, possibly padded by all-zero rows.
+
+        Returns
+        =======
+        float
+            The loss of the training batch.
+        """
+        with tf.GradientTape() as tape:
+            loss = -self._log_likelihood_incomplete(batch)
+
+        # Adam iteration
+        gradients = tape.gradient(loss, self.theta)
+        self._optimizer.apply_gradients(zip(gradients, self.theta))
+        return loss
+
+    @tf.function
+    def _log_likelihood_incomplete(self, obs):
         """Compute the log likelihood of a single incomplete observation.
 
         Parameters
@@ -287,15 +359,12 @@ class MCFA:
             The log-likelihood of the observation.
         """
 
-        print("LL")
-        obs = tf.squeeze(obs)
-        # m is mask of missing values. We only need the first entry
-        # m = tf.squeeze(tf.boolean_mask(obs == 0))  # tf.squeeze(m[0])
+        # Drop all-zero rows which were added for size padding
+        abs_sum_per_row = tf.reduce_sum(tf.abs(obs), 1)
+        mask = tf.not_equal(abs_sum_per_row, tf.zeros(shape=(1, 1), dtype=tf.float64))
 
-        m = tf.cast(obs, dtype=bool)  # tf.squeeze(m[0])
-        # because model parameters are(d, 1) and m is (d, n).
-        # If we assume the same missingness pattern,
-        # we can only pass m[0]
+        obs = tf.boolean_mask(obs, mask[0], axis=0)
+        m = tf.cast(obs[0], dtype=bool)  # mask of observed features in this band
         p_observed = tf.shape(tf.where(m))[0]  # number of observed features
 
         Omega = tf.linalg.set_diag(
@@ -327,14 +396,12 @@ class MCFA:
             mixture_distribution=tfp.distributions.Categorical(probs=pi),
             components_distribution=dis,
         )
-        try:
-            masked_data = tf.boolean_mask(obs, m, axis=1)
-        except ValueError:
-            masked_data = tf.boolean_mask(obs, m, axis=None)
+
+        masked_data = tf.boolean_mask(obs, m, axis=1)
         return gm.log_prob(tf.cast(masked_data, dtype=np.float32))
 
     @tf.function
-    def __cluster_incomplete(self, obs, m):
+    def _cluster_incomplete(self, obs, m):
         """Cluster (incomplete) data point. Low level, use cluster_data instead.
 
         Paramaeters
@@ -374,8 +441,6 @@ class MCFA:
         dis = tfp.distributions.MultivariateNormalTriL(
             loc=mean, scale_tril=tf.linalg.cholesky(Sigma)
         )
-        # dis = tfd.MultivariateNormalFullCovariance(loc=mean, covariance_matrix=Sigma)
-
         return tf.nn.softmax(
             dis.log_prob(tf.cast(obs[m], dtype=np.float32)) + tf.math.log(pi)
         )
@@ -394,41 +459,46 @@ class MCFA:
         """Plot the latent loadings."""
         mcfa.figures.plot_latent_loadings(self)
 
+    def plot_loss(self):
+        """Plot the training and validation loss."""
+        mcfa.figures.plot_loss(self)
+
     # ------
     # Functions for data and cluster parameter computation
     def compute_cluster_moments(self):
-        """Compute the cluster properties in data and in latentspace.
+        """Compute the cluster means and covariances in data and in latentspace.
 
         Returns
         =======
-        Return the data and latent space means and covariances.
+        np.ndarrays
+            The cluster means in data space
+        np.ndarrays
+            The cluster covariances in data space
+        np.ndarrays
+            The cluster means in latent space
+        np.ndarrays
+            The cluster covariances in latent space
         """
 
-        mu = self.mu
-        Xi = self.Xi
-        W = self.W
-        Omega = self.Omega
-        Psi = self.Psi
-
         # Get the mean and stddev of the clusters
-        mean_data = mu + tf.matmul(Xi, W, transpose_b=True).numpy()
+        mean_data = self.mu + tf.matmul(self.Xi, self.W, transpose_b=True).numpy()
 
+        # Undo the Cholesky decomposition
         Omega = tf.linalg.set_diag(
-            Omega,
-            tf.math.softplus(tf.linalg.diag_part(Omega)),
+            self.Omega,
+            tf.math.softplus(tf.linalg.diag_part(self.Omega)),
         ).numpy()
 
-        # undo chol decomposition
         Omega = np.array([omega_cluster @ omega_cluster.T for omega_cluster in Omega])
 
-        W_Omega = tf.matmul(W, Omega)
+        W_Omega = tf.matmul(self.W, Omega)
         cov_data = (
             tf.matmul(W_Omega, W_Omega, transpose_b=True)
-            + tf.linalg.diag(tf.math.softplus(Psi))
+            + tf.linalg.diag(tf.math.softplus(self.Psi))
         ).numpy()
 
         # Cluster moments in latent space are trained model parameters
-        mean_latent = Xi.numpy()
+        mean_latent = self.Xi.numpy()
         cov_latent = Omega
 
         return (
@@ -438,69 +508,67 @@ class MCFA:
             cov_latent,
         )
 
-    def compute_factor_scores(self, imputed=False):
+    def compute_factor_scores(self):
         """Compute the factor scores of the observations.
 
+        Returns
+        =======
+        np.ndarray
+            The factor scores [Z].
+        np.ndarray
+            The factor scores if the observation belongs to the most probable cluster [Zclust].
+        np.ndarray
+            The factor scores if the observation belongs to all clusters following tau [Zmean].
+
+        Notes
+        =====
         Computation based on Section 4 of Baek+ 2011.
-
-        Parameters
-        ==========
-        imputed : bool
+        The code is based on github.com/andycasey/mcfa
         """
-        mu = self.mu
-        Xi = self.Xi
-        W = self.W
-        Omega = self.Omega
-        Psi = self.Psi
-        tau = self.tau
 
-        W = W.numpy()
-
+        # Empty arrays to be filled later
         Z = np.zeros((self.n_components, self.N, self.n_factors))
-
         gamma = np.zeros((self.n_components, self.p, self.n_factors))
-        inv_D = np.diag(1.0 / tf.math.softplus(Psi))
 
+        D_inv = np.diag(1.0 / tf.math.softplus(self.Psi))
         I = np.eye(self.n_factors)
 
         # The cholesky decomposition and softplus application are undone in the
         # cluster moments function
-        _, _, xi, Omega = self.compute_cluster_moments()
+        _, _, Xi, Omega = self.compute_cluster_moments()
+        W = self.W.numpy()
 
-        Y = self.Y if not imputed else self.Y_imp
+        # Use the imputed observations if available
+        Y = self.Y if not hasattr(self, "Y_imp") else self.Y_imp
+        Y = Y - self.mu
 
-        Y = Y - mu
-
+        # Compute the scores per cluster
         for k in range(self.n_components):
 
-            # check if covariance matrix is ill-coniditioned
+            # Check if covariance matrix is ill-coniditioned
             if np.linalg.cond(Omega[k, :, :]) > 1e6:
-                print(
-                    f"Cluster {k} has few members; the covariance matrix is ill-conditioned."
-                )
                 epsilon = 1e-5
                 Omega[k] = Omega[k] + I * epsilon
 
             # using the Woodbury Identity for matrix inversion
             C = scipy.linalg.solve(
-                scipy.linalg.solve(Omega[k, :, :], I) + W.T @ inv_D @ W, I
+                scipy.linalg.solve(Omega[k, :, :], I) + W.T @ D_inv @ W, I
             )
-            gamma[k, :, :] = (inv_D - inv_D @ W @ C @ W.T @ inv_D) @ W @ Omega[k, :, :]
+            gamma[k, :, :] = (D_inv - D_inv @ W @ C @ W.T @ D_inv) @ W @ Omega[k, :, :]
             Z[k, :, :] = (
-                np.repeat(xi[[k], :], self.N).reshape((self.n_factors, self.N)).T
-                + (Y - (W @ xi[[k], :].T).T) @ gamma[k, :, :]
+                np.repeat(Xi[[k], :], self.N).reshape((self.n_factors, self.N)).T
+                + (Y - (W @ Xi[[k], :].T).T) @ gamma[k, :, :]
             )
 
-        cluster = np.argmax(tau, axis=1)
+        # Compute the cluster-specific scores
+        cluster = np.argmax(self.tau, axis=1)
 
         Zclust = np.zeros((self.N, self.n_factors))
         Zmean = np.zeros((self.N, self.n_factors))
 
-        # Compute (i) Uclust and (ii) Umean: Scores if the ith datapoint belongs to
-        # (i) a specific cluster or (ii) all clusters according to tau
         for i in range(self.N):
             Zclust[i] = Z[cluster[i], i, :]
-            Zmean[i] = Z[:, i].T @ tau[i]
+            Zmean[i] = Z[:, i].T @ self.tau[i]
 
         return Z, Zmean, Zclust
 
