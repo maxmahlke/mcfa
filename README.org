@@ -10,16 +10,19 @@ missing data. The interface resembles the [[https://scikit-learn.org/stable/][sk
 
 ** 3D-Gaussian distribution
 
-#+attr_html: :alt  :align left :class img
-[[gfx/complete_case_data_space.png][Complete Case - Data Space]]
+#+html: <p align="center"><img src="gfx/complete_case_data_space.png" /></p>
 
 ** 3D-Gaussian distribution with missing data
 
 * Install
 
+To add the package to your ~python~ environment, clone the repository and run
+
 #+begin_src shell
-$ pip install mcfa
+$ pip install --editable .
 #+end_src
+
+in the top-level directory.
 
 * Usage
 
@@ -38,9 +41,15 @@ A simple loss function convergence criterion is implemented: If the difference b
 
 *** GPU vs CPU
 
+If a GPU is available and properly set up, ~tensorflow~ will automatically execute the model training on it. To disable
+this behaviour, add
+
 #+begin_src python
+import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 #+end_src
+
+before the ~tensorflow~ import.
 
 *** Validation Set
 
