@@ -67,14 +67,14 @@ model.fit(Y, n_epochs,  learning_rate, batch_size, frac_validation, converge_epo
 
 *** Training speed
 
-The number of times that the model is trained on the dataset is set by ~n_epochs~. The ~learning_rate~ parameter set the learning rate of the Adam optimizer used for the SGD. It's default value is [[https://twitter.com/karpathy/status/801621764144971776?lang=en][3e-4]]. The ~batch_size~ parameter is passed to the ~tensorflow.data.Dataset.batch()~ method and defines the size of the batches that the observations are grouped in. Default is 32.
+The number of times that the model is trained on the dataset is set by ~n_epochs~. The ~learning_rate~ parameter set the learning rate of the Adam optimizer used for the SGD. It's default value is [[https://twitter.com/karpathy/status/801621764144971776?lang=en][3e-4]]. The ~batch_size~ parameter is passed to the ~tensorflow.data.Dataset.batch()~ method and defines the size of the batches that the observations are grouped in. Default is ~32~.
 
 *** Convergence of Loss function
 
-The negative log-likelihood of the model is used as loss function. The ~frac_validation~ parameter (default is 0.1) defines the fraction of observation samples that is used as validation set.
+The negative log-likelihood of the model is used as loss function. The ~frac_validation~ parameter (default is ~0.1~) defines the fraction of observation samples that is used as validation set.
 The validation and training loss are accessible via the ~model.loss_validation~ and ~model.loss_training~ attributes after training, and can be plotted using the ~model.plot_loss()~ method.
 
-A simple loss function convergence criterion is implemented: If the loss value averaged over the past ~converge_epochs~ epochs  (default is 10) is larger than the loss averaged over the equal number of epochs before that, the training is considered to have converged. It may not be reliable and you should always look at the loss function after training.
+A simple loss function convergence criterion is implemented: If the loss value averaged over the past ~converge_epochs~ epochs  (default is ~10~) is larger than the loss averaged over the equal number of epochs before that, the training is considered to have converged. It may not be reliable and you should always look at the loss function after training.
 
 *** Parameter Initialization
 
@@ -120,7 +120,7 @@ The imputed dataset is available via the ~model.Y_imp~ attribute.
 
 * Other implementations of MCFA
 
-- [[https://ieeexplore.ieee.org/document/5184847][Baek+ 2010]] in ~R~
+- [[https://github.com/suren-rathnayake/EMMIXmfa][Baek+ 2010]] in ~R~
 - [[https://github.com/andycasey/mcfa][Casey+ 2019]] in ~python~. The difference to this implementation is the use of
   the EM-algorithm instead of gradient descent and the imputation of the missing
   values before the model training. Further, our implementation does not offer as many
