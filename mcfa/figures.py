@@ -2,11 +2,13 @@
 
 """Functions to plot the data and latent space of the MCFA models."""
 
+import colorcet
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 
-CLUSTER_COLORS = np.array(["steelblue", "firebrick"])
+CLUSTER_COLORS = np.array(colorcet.glasbey_category10)
+CLUSTER_MARKERS = np.array([".", "x", "^", "s", "+"])
 
 
 def plot_data_space(model):
@@ -27,7 +29,7 @@ def plot_data_space(model):
     fig, axes = plt.subplots(ncols=model.p - 1, nrows=model.p - 1, figsize=(16, 10))
 
     # Get the cluter moments in data space
-    clusters_mean, clusters_cov, _, _ = model.compute_cluster_moments()
+    clusters_mean, clusters_cov, _, _ = model._compute_cluster_moments()
     clusters_mean = clusters_mean.numpy()
 
     for i in range(model.p - 1):
@@ -42,35 +44,26 @@ def plot_data_space(model):
                 continue
 
             # Plot the training data
-            ax.scatter(
-                model.Y[:, px],
-                model.Y[:, py],
-                marker="o",
-                c=CLUSTER_COLORS[model.clusters],
-            )
-
-            # ------
-            # Add missing datapoints and true location if known
-            if hasattr(model, "Y_imp"):
-
+            for k in range(model.n_components):
                 ax.scatter(
-                    model.Y_imp[:, px],
-                    model.Y_imp[:, py],
-                    marker="o",
-                    alpha=0.5,
-                    c=CLUSTER_COLORS[model.clusters],
+                    model.Y[np.where(model.clusters == k), px],
+                    model.Y[np.where(model.clusters == k), py],
+                    marker=CLUSTER_MARKERS[k],
+                    color=CLUSTER_COLORS[k],
                 )
 
-                # Add the known values to the edges of the subplots
-                # by replacing the NaNs with lower limits
-                xmin, xmax = ax.get_xlim()
-                ymin, ymax = ax.get_ylim()
+            # ------
+            # Add data points with imputed values
+            if hasattr(model, "Y_imp"):
 
-                data_x_or_y_missing = np.isnan(model.Y[:, [px, py]]).any(axis=1)
-                data_xy = model.Y[:, [px, py]][data_x_or_y_missing]
-
-                data_xy[np.isnan(data_xy[:, 0]), 0] = xmin - 0.1
-                data_xy[np.isnan(data_xy[:, 1]), 1] = ymin - 0.1
+                for k in range(model.n_components):
+                    ax.scatter(
+                        model.Y_imp[np.where(model.clusters == k), px],
+                        model.Y_imp[np.where(model.clusters == k), py],
+                        marker=CLUSTER_MARKERS[k],
+                        color=CLUSTER_COLORS[k],
+                        alpha=0.5,
+                    )
 
             # ------
             # Add the modeled clusters
@@ -91,8 +84,9 @@ def plot_data_space(model):
                     ls="--",
                 )
 
-            ax.set(xlabel=f"{px + 1}", ylabel=f"{py + 1}", title="Data Space")
+            ax.set(xlabel=f"{px + 1}", ylabel=f"{py + 1}")
 
+    fig.suptitle("Data Space")
     plt.tight_layout()
     plt.show()
 
@@ -116,8 +110,8 @@ def plot_latent_space(model):
     )
 
     # Compute the cluster moments and factor scores in latent spaces
-    _, _, clusters_mean, clusters_cov = model.compute_cluster_moments()
-    Z, Zmean, Zclust = model.compute_factor_scores()
+    _, _, clusters_mean, clusters_cov = model._compute_cluster_moments()
+    Z, Zmean, Zclust = model._compute_factor_scores()
 
     for i in range(model.n_factors - 1):
         for j in range(model.n_factors - 1):
@@ -131,6 +125,20 @@ def plot_latent_space(model):
 
             if dx >= dy:
 
+                if dx == 1 and dy == 1:
+                    A = model.W.numpy()
+                    D, J = A.shape
+                    xi = np.arange(D)
+
+                    for j in range(J):
+                        ax.plot(xi, A.T[j], "-", label=str(j + 1))
+
+                    ax.axhline(0, ls=":", c="#000000", zorder=-1, lw=0.5)
+
+                    ax.legend(frameon=False)
+                    ax.set(xlim=(-0.5, D - 0.5), title="Latent Loadings")
+                    continue
+
                 ax.axis("off")
                 continue
 
@@ -141,10 +149,10 @@ def plot_latent_space(model):
                 # Plot the factor scores by cluster
                 # Points with imputed dimensions are plotted with alpha=0.5
                 ax.scatter(
-                    Zmean[idx_cluster, dx],
-                    Zmean[idx_cluster, dy],
-                    marker="o",
-                    c=[CLUSTER_COLORS[k] for i in range(len(idx_cluster))],
+                    Zclust[idx_cluster, dx],
+                    Zclust[idx_cluster, dy],
+                    marker=CLUSTER_MARKERS[k],
+                    color=CLUSTER_COLORS[k],
                     s=30,
                     alpha=[
                         0.5 if np.any(np.isnan(model.Y[ind])) else 1
@@ -170,8 +178,9 @@ def plot_latent_space(model):
                     ls="--",
                 )
 
-        ax.set(xlabel=f"{dx + 1}", ylabel=f"{dy + 1}", title="Latent space")
+            ax.set(xlabel=f"{dx + 1}", ylabel=f"{dy + 1}")
 
+    fig.suptitle("Latent Space")
     plt.tight_layout()
     plt.show()
 
@@ -182,7 +191,7 @@ def plot_latent_loadings(model, block=True):
 
     A = model.W.numpy()
     D, J = A.shape
-    xi = np.arange(D)
+    xi = np.arange(D) + 1
 
     for j in range(J):
         ax.plot(xi, A.T[j], "-", label=str(j + 1))
@@ -190,9 +199,10 @@ def plot_latent_loadings(model, block=True):
     ax.axhline(0, ls=":", c="#000000", zorder=-1, lw=0.5)
 
     ax.legend(frameon=False)
-    ax.set(xlim=(-0.5, D - 0.5), title="Latent Loadings")
+    ax.set(xlim=(0.5, D + 0.5))
     ax.set_xticks(xi)
 
+    fig.suptitle("Latent Loadings")
     fig.tight_layout()
     plt.show()
 

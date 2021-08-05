@@ -31,7 +31,7 @@ if len(tf.config.list_physical_devices("GPU")):
     tf.config.experimental.set_memory_growth(device=gpu[0], enable=True)
 
 # Eager execution is good for debugging tensorflow but slow
-tf.config.run_functions_eagerly(False)
+# tf.config.run_functions_eagerly(True)
 
 
 class MCFA:
@@ -79,7 +79,10 @@ class MCFA:
         batch_size : int
             Batch size of training subsets to use during SGD. Larger is faster but less fine.
         """
-        self.Y = Y
+        if isinstance(Y, pd.DataFrame):
+            Y = Y.values
+
+        self.Y = Y.astype(np.float64)
         self.N, self.p = self.Y.shape
         self.n_epochs = int(n_epochs)
         self.frac_validation = float(frac_validation)
@@ -95,9 +98,10 @@ class MCFA:
             )
         if not any(np.all(~np.isnan(self.Y), axis=1)):
             print(
-                "The dataset does not contain a complete row of observations. Initialization with PCA will not work. "
-                "Consider looking into PPCA for initialization."
+                "The dataset does not contain a complete row of observations. This is not supported as the model "
+                " initialization with PCA will not work. Consider implementing PPCA as initialization method."
             )
+            sys.exit()
 
         # Initialize the clustering model
         self._initialize_model()
@@ -126,7 +130,7 @@ class MCFA:
 
         # Compute responsibility matrix
         self.tau = np.zeros((len(self.Y), self.n_components))
-        for i, sample in enumerate(Y):
+        for i, sample in enumerate(self.Y):
             self.tau[i, :] = self._cluster_incomplete(sample, np.isfinite(sample))
 
         # Attribute for convenient access
@@ -365,7 +369,10 @@ class MCFA:
             tf.math.softplus(tf.linalg.diag_part(self.Omega)),
         )
 
-        pi = tf.squeeze(tf.nn.softmax(self.pi))
+        if self.n_components > 1:
+            pi = tf.squeeze(tf.nn.softmax(self.pi))
+        else:
+            pi = tf.nn.softmax(self.pi)
         W_missing = tf.reshape(
             tf.squeeze(tf.gather(params=self.W, indices=tf.where(m), axis=0)),
             [p_observed, self.n_factors],
@@ -458,7 +465,7 @@ class MCFA:
 
     # ------
     # Functions for data and cluster parameter computation
-    def compute_cluster_moments(self):
+    def _compute_cluster_moments(self):
         """Compute the cluster means and covariances in data and in latentspace.
 
         Returns
@@ -501,7 +508,7 @@ class MCFA:
             cov_latent,
         )
 
-    def compute_factor_scores(self):
+    def _compute_factor_scores(self):
         """Compute the factor scores of the observations.
 
         Returns
@@ -528,7 +535,7 @@ class MCFA:
 
         # The cholesky decomposition and softplus application are undone in the
         # cluster moments function
-        _, _, Xi, Omega = self.compute_cluster_moments()
+        _, _, Xi, Omega = self._compute_cluster_moments()
         W = self.W.numpy()
 
         # Use the imputed observations if available
@@ -539,7 +546,8 @@ class MCFA:
         for k in range(self.n_components):
 
             # Check if covariance matrix is ill-coniditioned
-            if np.linalg.cond(Omega[k, :, :]) > 1e6:
+            if np.linalg.cond(Omega[k, :, :]) > 1e4:
+                print(f"cluter {k} ill-defined")
                 epsilon = 1e-5
                 Omega[k] = Omega[k] + I * epsilon
 
@@ -566,7 +574,14 @@ class MCFA:
         return Z, Zmean, Zclust
 
     def impute(self):
-        """Impute missing values following Wang 2013, Equ. 10"""
+        """Impute the missing values given the clusters.
+
+        Notes
+        =====
+        The imputed data is available as Y_imp attribute.
+        This follows Wang 2013, Equ. 10.
+        """
+
         self.Y_imp = self.Y.copy()
 
         for i in np.argwhere(np.isnan(self.Y).any(axis=1)):
@@ -580,7 +595,7 @@ class MCFA:
 
             # Build conditional cluster moments
 
-            _, Sigma, _, _ = self.compute_cluster_moments()
+            _, Sigma, _, _ = self._compute_cluster_moments()
 
             xi = self.Xi.numpy()[np.argmax(self.tau[i])]
             sigma = Sigma[np.argmax(self.tau[i])]
@@ -598,3 +613,67 @@ class MCFA:
             ym = mu_i_m + sigma_i_mo @ np.linalg.inv(sigma_i_oo) @ (yo - mu_i_o)
             y = O.T @ yo + M.T @ ym
             self.Y_imp[i] = y
+
+    def number_of_parameters(self):
+        """Compute the number of free model parameters. Required for
+        the Bayesian Information criterion.
+
+        Returns
+        =======
+        int
+            The number of free parameters.
+
+        Notes
+        =====
+        The computation follows Baek+ 2010, Equ. 13.
+        The implementation is from the Casey+ 2019 mcfa implementation.
+        """
+        p = self.Y.shape[1]
+        q, g = self.n_factors, self.n_components
+
+        return int((g - 1) + p + q * (p + g) + (g * q * (q + 1)) / 2 - q ** 2)
+
+    def bic(self):
+        """Compute the Bayesian Information Criterion of the model given the
+        data.
+
+        Returns
+        =======
+        float
+            The BIC value of the model given the data. A larger value indicates
+            a better model fit.
+        """
+        N, D = self.Y.shape
+        ll = []
+
+        for batch in self.training_set:
+            loss = self._log_likelihood_incomplete(batch)
+            ll.append(tf.reduce_sum(loss))
+        for batch in self.validation_set:
+            loss = self._log_likelihood_incomplete(batch)
+            ll.append(tf.reduce_sum(loss))
+
+        log_likelihood = sum(ll)
+
+        N, D = np.atleast_2d(self.Y).shape
+        return 2 * log_likelihood - np.log(N) * self.number_of_parameters()
+
+    def icl(self):
+        """Compute the Integrated Completed Likelihood of the model given the data.
+
+        Returns
+        =======
+        float
+            The ICL value of the model given the data. A larger value indicates
+            a better model fit.
+        """
+        entropy = 0
+
+        for zi in self.tau:
+            for g in range(self.n_components):
+
+                zig = zi[g] if zi[g] != 0 else 1e-18
+                entropy -= zig * np.log(zig)
+
+        icl = self.bic() - entropy
+        return icl
