@@ -5,15 +5,18 @@ Implementation of a Mixture of Common Factor Analyzers model with
 Stochastic Gradient Descent training.
 """
 
-import os
+import sys
+import warnings
 
 import numpy as np
 import pandas as pd
 import scipy
 from sklearn import decomposition, mixture
+import statsmodels
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tqdm import tqdm
+import pyppca
 
 import mcfa.figures
 
@@ -58,6 +61,7 @@ class MCFA:
         n_epochs,
         frac_validation=0.1,
         learning_rate=3e-4,
+        init_factors="pca",
         converge_epochs=10,
         batch_size=32,
     ):
@@ -74,6 +78,8 @@ class MCFA:
             Default is 0.1, i.e. 10%.
         learning_rate : float
             The learning rate passed to the gradient descent optimizer. Default is 3e-4.
+        init_factors : str
+            The method to initialize the latent factors with. Choose from ['pca', 'ppca']. Default is 'pca'.
         converge_epochs : int
             The amount of epochs over which to average the loss function in the convergence criterion.
         batch_size : int
@@ -87,17 +93,18 @@ class MCFA:
         self.n_epochs = int(n_epochs)
         self.frac_validation = float(frac_validation)
         self.learning_rate = float(learning_rate)
+        self.init_factors = init_factors
         self.converge_epochs = int(converge_epochs)
         self.batch_size = int(batch_size)
 
         # Quick tests of the dataset
         if not np.all(self.Y):
-            print(
+            warnings.warn(
                 "The dataset contains elements which are equal to zero. Zero is used to flag missing values. "
-                "This value will be ignored during the training."
+                "These values will be ignored during the training."
             )
         if not any(np.all(~np.isnan(self.Y), axis=1)):
-            print(
+            warnings.warn(
                 "The dataset does not contain a complete row of observations. This is not supported as the model "
                 " initialization with PCA will not work. Consider implementing PPCA as initialization method."
             )
@@ -109,32 +116,118 @@ class MCFA:
         # Train the model
         self._train_model()
 
-    def transform(self, Y=None):
+        # Orthonormalize the solution
+        self.orthonormalize()
+
+    def transform(self, Y, which="zmean"):
+        """Transform samples from data into latent space.
+
+        Parameters
+        ==========
+        Y : np.ndarray
+            The data samples to transform of shape N x p
+        which : str
+            Which type of clustering score should be returned. See Baek* 2011, section 4.
+            Choose from ['z', 'zclust', 'zmean']. Default is 'zmean'.
+
+        Returns
+        =======
+        np.ndarray
+            If which is 'z': The factor scores [Z] of shape N x q
+            If which is 'zclust':The factor scores if the observation belongs to the most probable cluster [Zclust].
+            If which is 'zmean': The factor scores if the observation belongs to all clusters following tau [Zmean].
+
+        Notes
+        =====
+        Computation based on Section 4 of Baek+ 2011.
+        The code is based on github.com/andycasey/mcfa
+        """
+
+        Y = Y - self.mu
+        N, p = Y.shape
+
+        # Empty arrays to be filled later
+        Z = np.zeros((self.n_components, N, self.n_factors))
+        gamma = np.zeros((self.n_components, p, self.n_factors))
+
+        D_inv = np.diag(1.0 / tf.math.softplus(self.Psi))
+        I = np.eye(self.n_factors)
+
+        # The cholesky decomposition and softplus application are undone in the
+        # cluster moments function
+        _, _, Xi, Omega = self._compute_cluster_moments()
+        W = self.W.numpy()
+
+        # Compute the scores per cluster
+        for k in range(self.n_components):
+
+            # Check if covariance matrix is ill-coniditioned
+            if np.linalg.cond(Omega[k, :, :]) > 1e4:
+                epsilon = 1e-5
+                Omega[k] = Omega[k] + I * epsilon
+
+            # using the Woodbury Identity for matrix inversion
+            C = scipy.linalg.solve(
+                scipy.linalg.solve(Omega[k, :, :], I) + W.T @ D_inv @ W, I
+            )
+            gamma[k, :, :] = (D_inv - D_inv @ W @ C @ W.T @ D_inv) @ W @ Omega[k, :, :]
+
+            Z[k, :, :] = (
+                np.repeat(Xi[[k], :], N).reshape((self.n_factors, N)).T
+                + (Y - (W @ Xi[[k], :].T).T) @ gamma[k, :, :]
+            )
+
+        # Compute the cluster-specific scores
+        tau, cluster = self.score(Y)
+        cluster = np.argmax(tau, axis=1)
+
+        Zclust = np.zeros((N, self.n_factors))
+        Zmean = np.zeros((N, self.n_factors))
+
+        for i in range(N):
+            Zclust[i] = Z[cluster[i], i, :]
+            Zmean[i] = Z[:, i].T @ tau[i]
+
+        if which == "z":
+            return Z
+        elif which == "zmean":
+            return Zmean
+        elif which == "zclust":
+            return Zclust
+
+    def inverse_transform(self, latent_scores):
+        """Compute the data given the latent scores."""
+
+    def score(self, Y):
         """Cluster the passed data given the learned model parameters.
 
         Parameters
         ==========
         Y : np.ndarray
-            The data to cluster. Must have the same features as the data used to train
-            the model.
+            The observed data to score. Must have the same features as the data used to train
+            the model, of shape N x p
 
-        Notes
-        =====
-        The assigned clusters and the responsibility matrix tau are accessible as model
-        parameters (model.tau and model.clusters).
+        Returns
+        =======
+        np.ndarray
+            The responsibility matrix tau, of shape N x g
+        np.ndarray
+            Array containing the most probable cluster for each sample, of shape N
         """
+        _, p = Y.shape
 
-        # If no data is passed, training data is clustered
-        if Y is not None:
-            self.Y = Y
+        assert (
+            p == self.p
+        ), f"The number of passed input features ({p}) has to be equal to the number of learned input features ({self.p})."
 
         # Compute responsibility matrix
-        self.tau = np.zeros((len(self.Y), self.n_components))
-        for i, sample in enumerate(self.Y):
-            self.tau[i, :] = self._cluster_incomplete(sample, np.isfinite(sample))
+        tau = np.zeros((len(Y), self.n_components))
+        for i, sample in enumerate(Y):
+            tau[i, :] = self._cluster_incomplete(sample, np.isfinite(sample))
 
         # Attribute for convenient access
-        self.clusters = tf.argmax(self.tau, axis=1)
+        clusters = tf.argmax(tau, axis=1)
+        return tau, clusters
 
     # ------
     # Model initialization functions
@@ -145,7 +238,10 @@ class MCFA:
         self.mu = np.nanmean(self.Y, axis=0).reshape([self.p])
 
         # Initialize the latent space
-        self._initialize_by_pca()
+        if self.init_factors == "pca":
+            self._initialize_by_pca()
+        elif self.init_factors == "ppca":
+            self._initialize_by_ppca()
 
         # Initialize the cluster components
         self._initialize_by_gmm()
@@ -180,6 +276,64 @@ class MCFA:
             pca.noise_variance_.astype(np.float32)
         ) * tf.ones([self.p])
 
+    def _initialize_by_ppca(self):
+        """Initialize the latent space parameters W and Psi with PPCA
+        on the entire dataset."""
+
+        # PPCA on the entire dataset
+        # pca = statsmodels.multivariate.pca.PCA(
+        #     data=self.Y,
+        #     ncomp=self.n_factors,
+        #     # demean=True,  # PCA works better on demeaned data
+        #     # normalize=False,
+        #     standardize=True,
+        #     missing="fill-em",
+        # )
+
+        data_init = self.Y.copy()
+        # data_init[:, -1] *= 1.5  # scale pV by factor to increase weight
+        pca_loadings, ss, M, pca_scores, data_imputed = pyppca.ppca(
+            # self.Y - np.nanmean(self.Y, axis=0), self.n_factors, dia=False
+            # self.Y,
+            data_init,  # - np.nanmean(data_init, axis=0),
+            self.n_factors,
+            dia=False,
+        )
+
+        # Flip the axes for classy to represent spectral components
+        if pca_loadings[0, 0] > 0:
+            pca_loadings[:, 0] *= -1
+            pca_scores[:, 0] *= -1
+        for comp in range(1, self.n_factors):
+            if pca_loadings[19, comp] > 0:
+                pca_loadings[:, comp] *= -1
+                pca_scores[:, comp] *= -1
+
+        # Initial values of factor scores
+        self.Z = pca_scores
+
+        # Initial values of W
+        self.W = pca_loadings
+
+        # Initial values of the component specific error terms
+        # The initial noise variance is equal to to the average of
+        # (min(n_features, n_samples) - n_components) smallest eigenvalues of the
+        # covariance matrix of X, see
+        # https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html
+
+        # We approximate the covariance of Y with the covariance of the complete case data
+        eigenvalues, _ = np.linalg.eig(np.cov(data_imputed))
+        average = np.mean(
+            sorted(eigenvalues)[: -(min([self.p, self.N]) - self.n_components)]
+        )
+        # noise_variance = np.ones([self.p]) * np.abs(average)
+        print(average)
+        noise_variance = np.ones([self.p]) * 0.001
+
+        self.Psi = tfp.math.softplus_inverse(
+            noise_variance.astype(np.float32)
+        ) * tf.ones([self.p])
+
     def _initialize_by_gmm(self):
         """Initialize the cluster parameters pi, xi, and omega using GMM in
         the initialized latent space."""
@@ -209,6 +363,8 @@ class MCFA:
 
         data_training = self.Y[~split]
         data_validation = self.Y[split]
+
+        self.validation_split = split
 
         # Now we create the subsets of equal missingness patterns for each dataset
         for i, data in enumerate([data_training, data_validation]):
@@ -248,7 +404,7 @@ class MCFA:
                         )
                     )
 
-                # Stack the batchs ontop of each other to construct a dataset
+                # Stack the batchs on top of each other to construct a dataset
                 subsets = data_batch if j == 0 else np.vstack([subsets, data_batch])
 
             if i == 0:
@@ -296,6 +452,13 @@ class MCFA:
             ll_valid = []
 
             for batch_training in self.training_set:
+
+                # Give a lower probability of training with batches with low completeness
+                missing_bins = len(np.where(batch_training.numpy()[0, :] == 0)[0])
+                skip_probability = missing_bins / self.p
+
+                if np.random.uniform(0, 1) <= skip_probability:
+                    continue
                 loss_training = self._train_step(batch_training)
                 ll_train.append(tf.reduce_mean(loss_training))
 
@@ -508,73 +671,18 @@ class MCFA:
             cov_latent,
         )
 
-    def _compute_factor_scores(self):
-        """Compute the factor scores of the observations.
+    def impute(self, Y):
+        """Impute the missing values given the clusters.
+
+        Parameters
+        ==========
+        Y : np.ndarray
+            The observed data to impute.
 
         Returns
         =======
         np.ndarray
-            The factor scores [Z].
-        np.ndarray
-            The factor scores if the observation belongs to the most probable cluster [Zclust].
-        np.ndarray
-            The factor scores if the observation belongs to all clusters following tau [Zmean].
-
-        Notes
-        =====
-        Computation based on Section 4 of Baek+ 2011.
-        The code is based on github.com/andycasey/mcfa
-        """
-
-        # Empty arrays to be filled later
-        Z = np.zeros((self.n_components, self.N, self.n_factors))
-        gamma = np.zeros((self.n_components, self.p, self.n_factors))
-
-        D_inv = np.diag(1.0 / tf.math.softplus(self.Psi))
-        I = np.eye(self.n_factors)
-
-        # The cholesky decomposition and softplus application are undone in the
-        # cluster moments function
-        _, _, Xi, Omega = self._compute_cluster_moments()
-        W = self.W.numpy()
-
-        # Use the imputed observations if available
-        Y = self.Y if not hasattr(self, "Y_imp") else self.Y_imp
-        Y = Y - self.mu
-
-        # Compute the scores per cluster
-        for k in range(self.n_components):
-
-            # Check if covariance matrix is ill-coniditioned
-            if np.linalg.cond(Omega[k, :, :]) > 1e4:
-                print(f"cluter {k} ill-defined")
-                epsilon = 1e-5
-                Omega[k] = Omega[k] + I * epsilon
-
-            # using the Woodbury Identity for matrix inversion
-            C = scipy.linalg.solve(
-                scipy.linalg.solve(Omega[k, :, :], I) + W.T @ D_inv @ W, I
-            )
-            gamma[k, :, :] = (D_inv - D_inv @ W @ C @ W.T @ D_inv) @ W @ Omega[k, :, :]
-            Z[k, :, :] = (
-                np.repeat(Xi[[k], :], self.N).reshape((self.n_factors, self.N)).T
-                + (Y - (W @ Xi[[k], :].T).T) @ gamma[k, :, :]
-            )
-
-        # Compute the cluster-specific scores
-        cluster = np.argmax(self.tau, axis=1)
-
-        Zclust = np.zeros((self.N, self.n_factors))
-        Zmean = np.zeros((self.N, self.n_factors))
-
-        for i in range(self.N):
-            Zclust[i] = Z[cluster[i], i, :]
-            Zmean[i] = Z[:, i].T @ self.tau[i]
-
-        return Z, Zmean, Zclust
-
-    def impute(self):
-        """Impute the missing values given the clusters.
+            The imputed data.
 
         Notes
         =====
@@ -582,23 +690,25 @@ class MCFA:
         This follows Wang 2013, Equ. 10.
         """
 
-        self.Y_imp = self.Y.copy()
+        N, p = Y.shape
 
-        for i in np.argwhere(np.isnan(self.Y).any(axis=1)):
+        Y_imp = Y.copy()
+        tau, cluster = self.score(Y)
+
+        _, Sigma, _, _ = self._compute_cluster_moments()
+
+        for i in np.argwhere(np.isnan(Y).any(axis=1)):
             # Start with a single sample with missing values
             i = i[0]
-            y = self.Y[i].copy()  # cp because we are assigning 5 below
+            y = Y[i].copy()  # cp because we are assigning 5 below
 
             # Build auxiliary matrices O and M
-            O = np.eye(self.p, self.p)[~np.isnan(y)]
-            M = np.eye(self.p, self.p)[np.isnan(y)]
+            O = np.eye(p, p)[~np.isnan(y)]
+            M = np.eye(p, p)[np.isnan(y)]
 
             # Build conditional cluster moments
-
-            _, Sigma, _, _ = self._compute_cluster_moments()
-
-            xi = self.Xi.numpy()[np.argmax(self.tau[i])]
-            sigma = Sigma[np.argmax(self.tau[i])]
+            xi = self.Xi.numpy()[np.argmax(tau[i])]
+            sigma = Sigma[np.argmax(tau[i])]
 
             mu_i_o = O @ self.W.numpy() @ xi + self.mu.numpy()[~np.isnan(y)]
             mu_i_m = M @ self.W.numpy() @ xi + self.mu.numpy()[np.isnan(y)]
@@ -612,7 +722,9 @@ class MCFA:
 
             ym = mu_i_m + sigma_i_mo @ np.linalg.inv(sigma_i_oo) @ (yo - mu_i_o)
             y = O.T @ yo + M.T @ ym
-            self.Y_imp[i] = y
+            Y_imp[i] = y
+
+        return Y_imp
 
     def number_of_parameters(self):
         """Compute the number of free model parameters. Required for
@@ -658,7 +770,7 @@ class MCFA:
         N, D = np.atleast_2d(self.Y).shape
         return 2 * log_likelihood - np.log(N) * self.number_of_parameters()
 
-    def icl(self):
+    def icl(self, Y):
         """Compute the Integrated Completed Likelihood of the model given the data.
 
         Returns
@@ -668,8 +780,9 @@ class MCFA:
             a better model fit.
         """
         entropy = 0
+        tau, cluster = self.score(Y)
 
-        for zi in self.tau:
+        for zi in tau:
             for g in range(self.n_components):
 
                 zig = zi[g] if zi[g] != 0 else 1e-18
@@ -677,3 +790,16 @@ class MCFA:
 
         icl = self.bic() - entropy
         return icl
+
+    def orthonormalize(self):
+        """Orthonormalize the latent loadings following Baek+ 2010, appendix."""
+
+        CTC = self.W.numpy().T @ self.W.numpy()
+        CT = np.linalg.cholesky(CTC)
+
+        # Replace W by WC^-1
+        print(self.W)
+        self.W = self.W @ np.linalg.inv(CT.T)
+        print(self.W)
+
+        # Update the cluster moments

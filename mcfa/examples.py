@@ -18,7 +18,7 @@ def gaussians_example(dropout=0.0, bic_icl=False):
     """Fit the MCFA model to simulated data from 3 4D-Gaussian distributions.
 
     Parameters
-    ==========
+    ----------
     dropout : float
         Fraction of points to randomly replace by NaN. Default is 0.
     bic_icl : bool
@@ -27,7 +27,7 @@ def gaussians_example(dropout=0.0, bic_icl=False):
 
     n_epochs = 200  # number of training epochs
 
-    p = 4  # number of data features
+    p = 6  # number of data features
     g = 3  # number of mixture components
     q = 2  # number of latent dimensions
 
@@ -96,7 +96,6 @@ def gaussians_example(dropout=0.0, bic_icl=False):
     model.transform(data)
 
     if dropout:
-
         # Impute the missing data based on the observation's assigned clusters
         model.impute()
 
@@ -118,24 +117,28 @@ def _compute_bic_icl(data):
         The data to cluster.
     """
 
+    n_components = range(1, 7)
+
+    LS = {2: "-", 3: "--", 4: "-.", 5: ":"}
+
     fig, ax = plt.subplots()
 
-    for q in [2, 3]:
+    for q in [2, 3, 4, 5]:
 
         bic = []
         icl = []
 
-        for g in range(1, 5):
+        for g in n_components:
 
             model = MCFA(n_components=g, n_factors=q)
 
             model.fit(
                 data,
-                n_epochs=200,
-                learning_rate=1e-4,
-                frac_validation=0.15,
-                converge_epochs=20,
-                batch_size=4,
+                n_epochs=10,
+                learning_rate=3e-4,
+                frac_validation=0.0,
+                converge_epochs=100,
+                batch_size=40,
             )
 
             model.transform(data)
@@ -143,12 +146,8 @@ def _compute_bic_icl(data):
             bic.append(model.bic())
             icl.append(model.icl())
 
-        ax.plot(
-            range(1, 5), bic, label=f"BIC - q={q}", c="blue", ls="--" if q == 2 else ":"
-        )
-        ax.plot(
-            range(1, 5), icl, label=f"ICL - q={q}", c="red", ls="--" if q == 2 else ":"
-        )
+        ax.plot(n_components, bic, label=f"BIC - q={q}", c="blue", ls=LS[q])
+        ax.plot(n_components, icl, label=f"ICL - q={q}", c="red", ls=LS[q])
 
     ax.set(xlabel="N Components", ylabel="BIC/ICL")
     ax.legend(frameon=False)
@@ -156,114 +155,13 @@ def _compute_bic_icl(data):
     plt.show()
 
 
-def icl_baek_2010_section_5(dimension=3, dropout=0.0):
-    """Fit the MCFA model to the example application in Baek+ 2010.
-
-    Parameters
-    ==========
-    dimension : int
-        The dimension of the data space.
-    dropout : float
-        Fraction of points to randomly replace by NaN. Default is 0.
-    """
-    seed = 37  # set seed for reproducibility
-    np.random.seed(seed)
-
-    epochs = 100  # number of training epochs
-
-    g = 3  # number of mixture components
-    q = 3  # number of latent dimensions
-
-    # ------
-    # Define the underlying multivariate Gaussian distributions
-    N = 500  # number of random samples drawn
-
-    if dimension == 3:
-        data = sample_3d(N)
-    else:
-        data = sample_4d(N)
-
-    # Dropout data if specified - nice one-liner from
-    # https://stackoverflow.com/a/32182680/6162422
-    if dropout:
-        data.ravel()[
-            np.random.choice(data.size, int(data.size * dropout), replace=False)
-        ] = np.nan
-
-    # Some points may have had all observations removed - we resample those
-    if any(np.isnan(data).all(axis=1)):
-        data[np.isnan(data).all(axis=1)] = sample_3d(
-            len(data[np.isnan(data).all(axis=1)])
-        )
-    # ------
-    # Train the MCFA model
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-
-    for q in [2]:
-
-        icl = []
-        bic = []
-
-        n_comps = range(1, 8)
-        for g in n_comps:
-            model = MCFA(n_components=g, n_factors=q)
-
-            # Fit the model parameters using ML
-            model.fit(
-                data,
-                n_epochs=50,
-                learning_rate=1e-4,
-                frac_validation=0.15,
-                converge_epochs=20,
-                batch_size=4,
-            )
-            print(q, g, model.number_of_parameters())
-
-            # Compute the cluster probabilities of the observations
-            model.transform(data)
-            # model.plot_data_space()
-            # model.plot_latent_space()
-
-            if dropout:
-                # Impute the missing data based on the observation's assigned clusters
-                model.impute()
-
-            # if g in [2, 6, 10]:
-            #     model.plot_data_space()
-            #     model.plot_latent_space()
-
-            bic.append(model.bic())
-            icl.append(model.icl())
-
-        ax.plot(
-            n_comps,
-            icl,
-            c="blue",
-            ls="-" if q == 2 else "--",
-            label="ICL" if q == 2 else None,
-        )
-        ax.plot(
-            n_comps,
-            bic,
-            c="red",
-            ls="-" if q == 2 else "--",
-            label="BIC" if q == 2 else None,
-        )
-
-    ax.set(xlabel="N Components")
-    ax.legend(frameon=False)
-    plt.show()
-
-
 if __name__ == "__main__":
 
     # Compute example of three 4D-Gaussians in 2D/3D-latent space
-    gaussians_example()
+    # gaussians_example()
 
     # Compute the BIC and ICL scores for the 4D-Gaussian samples
-    gaussians_example(bic_icl=True)
+    gaussians_example(bic_icl=True, dropout=0.3)
 
     # Compute example of three 4D-Gaussians in 2D/3d-latent space with 20% missing data
-    gaussians_example(dropout=0.3)
+    # gaussians_example(dropout=0.3)
