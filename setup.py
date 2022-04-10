@@ -9,10 +9,13 @@ setup(
     py_modules=["mcfa"],
     install_requires=[
         "tensorflow",
+        "tensorflow-probability",
         "matplotlib",
         "numpy",
         "tqdm",
+        "colorcet",
         "pandas",
+        "pyppca",
         "scipy",
         "scikit-learn",
     ],

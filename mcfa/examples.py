@@ -9,7 +9,6 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 from mcfa import MCFA
 

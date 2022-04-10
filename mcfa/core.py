@@ -5,6 +5,7 @@ Implementation of a Mixture of Common Factor Analyzers model with
 Stochastic Gradient Descent training.
 """
 
+import pickle
 import sys
 import warnings
 
@@ -12,7 +13,6 @@ import numpy as np
 import pandas as pd
 import scipy
 from sklearn import decomposition, mixture
-import statsmodels
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tqdm import tqdm
@@ -40,13 +40,11 @@ if len(tf.config.list_physical_devices("GPU")):
 class MCFA:
     """Mixture of Common Factor Analyzers model implementation."""
 
-    # ------
-    # Model API functions
     def __init__(self, n_components, n_factors):
         """Initialize the MCFA model instance.
 
         Parameters
-        ==========
+        ----------
         n_components : int
             The number of mixture components
         n_factors : int
@@ -62,13 +60,12 @@ class MCFA:
         frac_validation=0.1,
         learning_rate=3e-4,
         init_factors="pca",
-        converge_epochs=10,
         batch_size=32,
     ):
         """Initialize the model parameters and train them with the passed data.
 
         Parameters
-        ==========
+        ----------
         Y : np.ndarray
             The observed data to cluster. May contain missing values.
         n_epochs : int
@@ -80,8 +77,6 @@ class MCFA:
             The learning rate passed to the gradient descent optimizer. Default is 3e-4.
         init_factors : str
             The method to initialize the latent factors with. Choose from ['pca', 'ppca']. Default is 'pca'.
-        converge_epochs : int
-            The amount of epochs over which to average the loss function in the convergence criterion.
         batch_size : int
             Batch size of training subsets to use during SGD. Larger is faster but less fine.
         """
@@ -94,7 +89,6 @@ class MCFA:
         self.frac_validation = float(frac_validation)
         self.learning_rate = float(learning_rate)
         self.init_factors = init_factors
-        self.converge_epochs = int(converge_epochs)
         self.batch_size = int(batch_size)
 
         # Quick tests of the dataset
@@ -123,7 +117,7 @@ class MCFA:
         """Transform samples from data into latent space.
 
         Parameters
-        ==========
+        ----------
         Y : np.ndarray
             The data samples to transform of shape N x p
         which : str
@@ -131,14 +125,14 @@ class MCFA:
             Choose from ['z', 'zclust', 'zmean']. Default is 'zmean'.
 
         Returns
-        =======
+        -------
         np.ndarray
             If which is 'z': The factor scores [Z] of shape N x q
             If which is 'zclust':The factor scores if the observation belongs to the most probable cluster [Zclust].
             If which is 'zmean': The factor scores if the observation belongs to all clusters following tau [Zmean].
 
         Notes
-        =====
+        -----
         Computation based on Section 4 of Baek+ 2011.
         The code is based on github.com/andycasey/mcfa
         """
@@ -178,7 +172,8 @@ class MCFA:
             )
 
         # Compute the cluster-specific scores
-        tau, cluster = self.score(Y)
+        cluster = self.predict(Y)
+        tau = self.predict_proba(Y)
         cluster = np.argmax(tau, axis=1)
 
         Zclust = np.zeros((N, self.n_factors))
@@ -198,21 +193,20 @@ class MCFA:
     def inverse_transform(self, latent_scores):
         """Compute the data given the latent scores."""
 
-    def score(self, Y):
-        """Cluster the passed data given the learned model parameters.
+    def predict_proba(self, Y):
+        """Compute the responsibility matrix tau, giving the probability for each sample to
+        belong to any component in the model.
 
         Parameters
-        ==========
+        ----------
         Y : np.ndarray
             The observed data to score. Must have the same features as the data used to train
             the model, of shape N x p
 
         Returns
-        =======
+        -------
         np.ndarray
             The responsibility matrix tau, of shape N x g
-        np.ndarray
-            Array containing the most probable cluster for each sample, of shape N
         """
         _, p = Y.shape
 
@@ -225,9 +219,27 @@ class MCFA:
         for i, sample in enumerate(Y):
             tau[i, :] = self._cluster_incomplete(sample, np.isfinite(sample))
 
+        return tau
+
+    def predict(self, Y):
+        """Compute the most likely latent component for each sample in Y.
+
+        Parameters
+        ----------
+        Y : np.ndarray
+            The observed data to score. Must have the same features as the data used to train
+            the model, of shape N x p
+
+        Returns
+        -------
+        np.ndarray
+            Array containing the most probable cluster for each sample, of shape N
+        """
+        tau = self.predict_proba(Y)
+
         # Attribute for convenient access
-        clusters = tf.argmax(tau, axis=1)
-        return tau, clusters
+        clusters = tf.argmax(tau, axis=1).numpy()
+        return clusters
 
     # ------
     # Model initialization functions
@@ -280,34 +292,10 @@ class MCFA:
         """Initialize the latent space parameters W and Psi with PPCA
         on the entire dataset."""
 
-        # PPCA on the entire dataset
-        # pca = statsmodels.multivariate.pca.PCA(
-        #     data=self.Y,
-        #     ncomp=self.n_factors,
-        #     # demean=True,  # PCA works better on demeaned data
-        #     # normalize=False,
-        #     standardize=True,
-        #     missing="fill-em",
-        # )
-
         data_init = self.Y.copy()
-        # data_init[:, -1] *= 1.5  # scale pV by factor to increase weight
         pca_loadings, ss, M, pca_scores, data_imputed = pyppca.ppca(
-            # self.Y - np.nanmean(self.Y, axis=0), self.n_factors, dia=False
-            # self.Y,
-            data_init,  # - np.nanmean(data_init, axis=0),
-            self.n_factors,
-            dia=False,
+            data_init, self.n_factors, dia=False
         )
-
-        # Flip the axes for classy to represent spectral components
-        if pca_loadings[0, 0] > 0:
-            pca_loadings[:, 0] *= -1
-            pca_scores[:, 0] *= -1
-        for comp in range(1, self.n_factors):
-            if pca_loadings[19, comp] > 0:
-                pca_loadings[:, comp] *= -1
-                pca_scores[:, comp] *= -1
 
         # Initial values of factor scores
         self.Z = pca_scores
@@ -316,18 +304,6 @@ class MCFA:
         self.W = pca_loadings
 
         # Initial values of the component specific error terms
-        # The initial noise variance is equal to to the average of
-        # (min(n_features, n_samples) - n_components) smallest eigenvalues of the
-        # covariance matrix of X, see
-        # https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html
-
-        # We approximate the covariance of Y with the covariance of the complete case data
-        eigenvalues, _ = np.linalg.eig(np.cov(data_imputed))
-        average = np.mean(
-            sorted(eigenvalues)[: -(min([self.p, self.N]) - self.n_components)]
-        )
-        # noise_variance = np.ones([self.p]) * np.abs(average)
-        print(average)
         noise_variance = np.ones([self.p]) * 0.001
 
         self.Psi = tfp.math.softplus_inverse(
@@ -469,28 +445,18 @@ class MCFA:
             self.loss_training.append(tf.reduce_mean(ll_train))
             self.loss_validation.append(tf.reduce_mean(ll_valid))
 
-            # Check convergence
-            if epoch > 2 * self.converge_epochs:
-                if np.mean(
-                    self.loss_validation[
-                        -2 * self.converge_epochs : -self.converge_epochs
-                    ]
-                ) <= np.mean(self.loss_validation[-self.converge_epochs :]):
-                    progress.set_description("Converged ")
-                    break
-
     @tf.function
     def _train_step(self, batch):
         """Execute a gradient-descent step.
 
         Parameters
-        ==========
+        ----------
         batch : tf.data.Dataset
             The observation[s] to train the model on. Same missingness pattern between
             the observations, possibly padded by all-zero rows.
 
         Returns
-        =======
+        -------
         float
             The loss of the training batch.
         """
@@ -507,14 +473,14 @@ class MCFA:
         """Compute the log likelihood of a single incomplete observation.
 
         Parameters
-        ==========
+        ----------
         obs : np.ndarray
             A single sample of observations. May contain NaNs.
         m : np.ndarray of bools
             The data mask.
 
         Returns
-        =======
+        -------
         np.ndarray
             The log-likelihood of the observation.
         """
@@ -567,8 +533,8 @@ class MCFA:
     def _cluster_incomplete(self, obs, m):
         """Cluster (incomplete) data point. Low level, use cluster_data instead.
 
-        Paramaeters
-        ===========
+        Parameters
+        ----------
         obs : np.ndarray
             A single sample of observations. May contain NaNs.
         m : np.ndarray of bools
@@ -579,7 +545,7 @@ class MCFA:
             The current model parameters.
 
         Returns
-        =======
+        -------
         np.ndarray of floats
             The probability of belonging to each cluster. Sums to 1.
         """
@@ -609,14 +575,42 @@ class MCFA:
         )
 
     # ------
-    # Helper functions for plotting
-    def plot_data_space(self):
-        """Plot the data and clusters in the original space."""
-        mcfa.figures.plot_data_space(self)
+    # Helper functions
+    def to_file(self, path):
+        """Write the trained model instance to file.
 
-    def plot_latent_space(self):
+        Parameters
+        ----------
+        path : str
+            The path to the pickled MCFA parameters dictionary.
+        """
+
+        parameters = {}
+
+        for param in [
+            "n_components",
+            "n_factors",
+            "Xi",
+            "pi",
+            "W",
+            "Omega",
+            "Psi",
+            "mu",
+            "loss_training",
+            "loss_validation",
+        ]:
+            parameters[param] = getattr(self, param)
+
+        with open(path, "wb") as file_:
+            pickle.dump(parameters, file_)
+
+    def plot_data_space(self, *args, **kwargs):
+        """Plot the data and clusters in the original space."""
+        mcfa.figures.plot_data_space(self, *args, **kwargs)
+
+    def plot_latent_space(self, *args, **kwargs):
         """Plot the data and clusters in the latent space."""
-        mcfa.figures.plot_latent_space(self)
+        mcfa.figures.plot_latent_space(self, *args, **kwargs)
 
     def plot_latent_loadings(self):
         """Plot the latent loadings."""
@@ -632,7 +626,7 @@ class MCFA:
         """Compute the cluster means and covariances in data and in latentspace.
 
         Returns
-        =======
+        -------
         np.ndarrays
             The cluster means in data space
         np.ndarrays
@@ -661,7 +655,7 @@ class MCFA:
         ).numpy()
 
         # Cluster moments in latent space are trained model parameters
-        mean_latent = self.Xi.numpy()
+        mean_latent = self.Xi
         cov_latent = Omega
 
         return (
@@ -675,25 +669,24 @@ class MCFA:
         """Impute the missing values given the clusters.
 
         Parameters
-        ==========
+        ----------
         Y : np.ndarray
             The observed data to impute.
 
         Returns
-        =======
+        -------
         np.ndarray
             The imputed data.
 
         Notes
-        =====
+        -----
         The imputed data is available as Y_imp attribute.
         This follows Wang 2013, Equ. 10.
         """
 
-        N, p = Y.shape
-
+        _, p = Y.shape
         Y_imp = Y.copy()
-        tau, cluster = self.score(Y)
+        tau = self.predict_proba(Y)
 
         _, Sigma, _, _ = self._compute_cluster_moments()
 
@@ -707,7 +700,7 @@ class MCFA:
             M = np.eye(p, p)[np.isnan(y)]
 
             # Build conditional cluster moments
-            xi = self.Xi.numpy()[np.argmax(tau[i])]
+            xi = self.Xi[np.argmax(tau[i])]
             sigma = Sigma[np.argmax(tau[i])]
 
             mu_i_o = O @ self.W.numpy() @ xi + self.mu.numpy()[~np.isnan(y)]
@@ -731,12 +724,12 @@ class MCFA:
         the Bayesian Information criterion.
 
         Returns
-        =======
+        -------
         int
             The number of free parameters.
 
         Notes
-        =====
+        -----
         The computation follows Baek+ 2010, Equ. 13.
         The implementation is from the Casey+ 2019 mcfa implementation.
         """
@@ -745,17 +738,17 @@ class MCFA:
 
         return int((g - 1) + p + q * (p + g) + (g * q * (q + 1)) / 2 - q ** 2)
 
-    def bic(self):
+    def bic(self, Y):
         """Compute the Bayesian Information Criterion of the model given the
         data.
 
         Returns
-        =======
+        -------
         float
             The BIC value of the model given the data. A larger value indicates
             a better model fit.
         """
-        N, D = self.Y.shape
+        N, _ = Y.shape
         ll = []
 
         for batch in self.training_set:
@@ -767,20 +760,20 @@ class MCFA:
 
         log_likelihood = sum(ll)
 
-        N, D = np.atleast_2d(self.Y).shape
+        N, _ = np.atleast_2d(self.Y).shape
         return 2 * log_likelihood - np.log(N) * self.number_of_parameters()
 
     def icl(self, Y):
         """Compute the Integrated Completed Likelihood of the model given the data.
 
         Returns
-        =======
+        -------
         float
             The ICL value of the model given the data. A larger value indicates
             a better model fit.
         """
         entropy = 0
-        tau, cluster = self.score(Y)
+        tau = self.predict_proba(Y)
 
         for zi in tau:
             for g in range(self.n_components):
@@ -788,18 +781,56 @@ class MCFA:
                 zig = zi[g] if zi[g] != 0 else 1e-18
                 entropy -= zig * np.log(zig)
 
-        icl = self.bic() - entropy
+        icl = self.bic(Y) - entropy
         return icl
 
     def orthonormalize(self):
         """Orthonormalize the latent loadings following Baek+ 2010, appendix."""
 
         CTC = self.W.numpy().T @ self.W.numpy()
-        CT = np.linalg.cholesky(CTC)
+        C = np.linalg.cholesky(CTC).T
 
         # Replace W by WC^-1
-        print(self.W)
-        self.W = self.W @ np.linalg.inv(CT.T)
-        print(self.W)
+        self.W = self.W @ np.linalg.inv(C)
 
-        # Update the cluster moments
+        # Update Xi and Omega
+        self.Xi = (C @ self.Xi.numpy().T).T
+        self.Omega = np.array([C @ omega_i @ C.T for omega_i in self.Omega.numpy()])
+
+
+def from_file(path):
+    """Read a trained model instance from file.
+
+    Parameters
+    ----------
+    path : str
+        The path to the pickled MCFA parameters dictionary.
+
+    Returns
+    -------
+    mcfa.MCFA
+        The MCFA model instance with the parameters instantiated from file.
+    """
+
+    with open(path, "rb") as file_:
+        parameters = pickle.load(file_)
+
+    # Hyperparameters
+    model = MCFA(
+        n_components=parameters["n_components"], n_factors=parameters["n_factors"]
+    )
+
+    # And learned model parameters
+    for param in [
+        "Xi",
+        "pi",
+        "W",
+        "Omega",
+        "Psi",
+        "mu",
+        "loss_training",
+        "loss_validation",
+    ]:
+        setattr(model, param, parameters[param])
+
+    return model

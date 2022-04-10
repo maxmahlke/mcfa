@@ -3,32 +3,37 @@
 """Functions to plot the data and latent space of the MCFA models."""
 
 import colorcet
-import matplotlib as mpl
+from matplotlib.patches import Ellipse
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.stats import chi2
 
 CLUSTER_COLORS = np.array(colorcet.glasbey_category10)
 CLUSTER_MARKERS = np.array([".", "x", "^", "s", "+"])
 
 
-def plot_data_space(model):
+def plot_data_space(model, Y, clusters=np.array([])):
     """Plot the model training data, colour-coded by cluster if the model has
     been trained.
 
     Parameters
-    ==========
+    ----------
     model : core.MCFA
         An MCFA model instance.
+    Y : np.ndarray
+        The data to plot.
+    clusters : np.ndarray
+        The cluster assignments of the data. Optional, default is empty array.
 
     Notes
-    =====
+    -----
     Datapoints with at least one dimension imputed are displayed with half opacity.
     """
 
     # Create triangular figure of 2d projections of dimension pairs
     fig, axes = plt.subplots(ncols=model.p - 1, nrows=model.p - 1, figsize=(16, 10))
 
-    # Get the cluter moments in data space
+    # Get the cluster moments in data space
     clusters_mean, clusters_cov, _, _ = model._compute_cluster_moments()
     clusters_mean = clusters_mean.numpy()
 
@@ -46,8 +51,8 @@ def plot_data_space(model):
             # Plot the training data
             for k in range(model.n_components):
                 ax.scatter(
-                    model.Y[np.where(model.clusters == k), px],
-                    model.Y[np.where(model.clusters == k), py],
+                    Y[clusters == k, px] if clusters.size else Y[:, px],
+                    Y[clusters == k, py] if clusters.size else Y[:, py],
                     marker=CLUSTER_MARKERS[k],
                     color=CLUSTER_COLORS[k],
                 )
@@ -58,8 +63,8 @@ def plot_data_space(model):
 
                 for k in range(model.n_components):
                     ax.scatter(
-                        model.Y_imp[np.where(model.clusters == k), px],
-                        model.Y_imp[np.where(model.clusters == k), py],
+                        model.Y_imp[np.where(clusters == k), px],
+                        model.Y_imp[np.where(clusters == k), py],
                         marker=CLUSTER_MARKERS[k],
                         color=CLUSTER_COLORS[k],
                         alpha=0.5,
@@ -91,17 +96,21 @@ def plot_data_space(model):
     plt.show()
 
 
-def plot_latent_space(model):
+def plot_latent_space(model, Z, clusters, mask_imputed=None):
     """Plot the model data and clusters in latent space.
 
     Parameters
-    ==========
+    ----------
     model : core.MCFA
-        An MCFA model instance.
-
-    Notes
-    =====
-    Datapoints with at least one dimension imputed are displayed with half opacity.
+        A trained MCFA model instance.
+    Z : np.ndarray
+        The latent scores of the data.
+    clusters : np.ndarray
+        The cluster assignments of the data.
+    mask_imputed : np.ndarray
+        A mask of the input data Y where the cell is True if the value was
+        observed and False if it is missing. Used to change opacity of imputed scores.
+        Default is None, disabling the opacity-change.
     """
 
     # Create triangular figure of 2d projections of dimension pairs
@@ -111,7 +120,6 @@ def plot_latent_space(model):
 
     # Compute the cluster moments and factor scores in latent spaces
     _, _, clusters_mean, clusters_cov = model._compute_cluster_moments()
-    Z, Zmean, Zclust = model._compute_factor_scores()
 
     for i in range(model.n_factors - 1):
         for j in range(model.n_factors - 1):
@@ -124,40 +132,24 @@ def plot_latent_space(model):
             dy = i + 1  # index of data feature to plot on y-axis
 
             if dx >= dy:
-
-                if dx == 1 and dy == 1:
-                    A = model.W.numpy()
-                    D, J = A.shape
-                    xi = np.arange(D)
-
-                    for j in range(J):
-                        ax.plot(xi, A.T[j], "-", label=str(j + 1))
-
-                    ax.axhline(0, ls=":", c="#000000", zorder=-1, lw=0.5)
-
-                    ax.legend(frameon=False)
-                    ax.set(xlim=(-0.5, D - 0.5), title="Latent Loadings")
-                    continue
-
                 ax.axis("off")
                 continue
 
             for k in range(model.n_components):
 
-                idx_cluster = np.where(model.clusters == k)[0]
+                idx_cluster = np.where(clusters == k)[0]
 
                 # Plot the factor scores by cluster
                 # Points with imputed dimensions are plotted with alpha=0.5
                 ax.scatter(
-                    Zclust[idx_cluster, dx],
-                    Zclust[idx_cluster, dy],
+                    Z[idx_cluster, dx],
+                    Z[idx_cluster, dy],
                     marker=CLUSTER_MARKERS[k],
                     color=CLUSTER_COLORS[k],
                     s=30,
-                    alpha=[
-                        0.5 if np.any(np.isnan(model.Y[ind])) else 1
-                        for ind in idx_cluster
-                    ],
+                    alpha=[0.5 if np.any(mask_imputed) else 1 for ind in idx_cluster]
+                    if mask_imputed is not None
+                    else 1,
                 )
 
                 # Add the cluster confidence ellipse
@@ -222,71 +214,63 @@ def plot_loss(model):
     plt.show()
 
 
-# ------
-# Helper function from matplotliib
-def confidence_ellipse(mean, cov, ax, n_std=1.0, facecolor="none", **kwargs):
-    """
-    Create a plot of the covariance confidence ellipse of `x` and `y`
+def confidence_ellipse(mean, cov, ax, probability=0.95, **kwargs):
+    """Plot the confidence ellipse at a given level of the covariance matrix.
 
-    See how and why this works: https://carstenschelp.github.io/2018/09/14/Plot_Confidence_Ellipse_001.html
-
-    This function has made it into the matplotlib examples collection:
-    https://matplotlib.org/devdocs/gallery/statistics/confidence_ellipse.html#sphx-glr-gallery-statistics-confidence-ellipse-py
-
-    Or, once matplotlib 3.1 has been released:
-    https://matplotlib.org/gallery/index.html#statistics
-
-    I update this gist according to the version there, because thanks to the matplotlib community
-    the code has improved quite a bit.
     Parameters
     ----------
-    x, y : array_like, shape (n, )
-        Input data.
-    ax : matplotlib.axes.Axes
-        The axes object to draw the ellipse into.
-    n_std : float
-        The number of standard deviations to determine the ellipse's radiuses.
+    mean : np.ndarray
+        The mean coordinates of the data.
+    cov : np.ndarray
+        The covariance matrix of the data
+    ax : matplotlib.axis.Axis
+        The axis instance to add the ellipse to.
+    probability : float
+        The probability level at which to draw the ellipse. Default is 0.95.
+
     Returns
     -------
-    matplotlib.patches.Ellipse
-    Other parameters
-    ----------------
-    kwargs : `~matplotlib.patches.Patch` properties
+    matplotlib.axis.Axis
+        The axis instance with the ellipse added.
+
+    Notes
+    -----
+    Further keyword arguments are passed to the matplotlib.patches.Ellipse
+    instance and can be used to change the ellipse appearance.
     """
-    if len(mean) != 2:
-        print("mean must have length 2")
-    if cov.shape != (2, 2):
-        print("cov must be a 2x2 matrix")
 
-    pearson = cov[0, 1] / np.sqrt(cov[0, 0] * cov[1, 1])
-    # Using a special case to obtain the eigenvalues of this
-    # two-dimensionl dataset.
-    ell_radius_x = np.sqrt(1 + pearson)
-    ell_radius_y = np.sqrt(1 - pearson)
-    ellipse = mpl.patches.Ellipse(
-        (0, 0),
-        width=ell_radius_x * 2,
-        height=ell_radius_y * 2,
-        facecolor=facecolor,
-        **kwargs,
+    # ------
+    # Compute error ellipse axes and rotation
+    eigenvalues, eigenvector = np.linalg.eigh(cov)
+
+    # ensure orientation of eigenvector in line with angle definition
+    for i, vector in enumerate(eigenvector):
+        if vector[0] < 0:
+            eigenvector[i] *= -1
+
+    t = np.linspace(0, 2 * np.pi, 100)
+    a = np.sqrt(eigenvalues[0] * chi2(df=2).ppf(probability))
+    b = np.sqrt(eigenvalues[1] * chi2(df=2).ppf(probability))
+
+    t_rot = -angle_between([1, 0], eigenvector[0])
+
+    ellipse = np.array([a * np.cos(t), b * np.sin(t)])
+
+    # 2-D rotation matrix
+    rotation = np.array(
+        [[np.cos(t_rot), -np.sin(t_rot)], [np.sin(t_rot), np.cos(t_rot)]]
     )
+    ell_rot = np.zeros((2, ellipse.shape[1]))
 
-    # Calculating the stdandard deviation of x from
-    # the squareroot of the variance and multiplying
-    # with the given number of standard deviations.
-    mean_x, mean_y = mean
+    for i in range(ellipse.shape[1]):
+        ell_rot[:, i] = np.dot(rotation, ellipse[:, i])
 
-    scale_x = np.sqrt(cov[0, 0]) * n_std
+    elli = Ellipse(mean, 2 * a, 2 * b, np.degrees(t_rot), **kwargs)
+    return ax.add_patch(elli)
 
-    # calculating the stdandard deviation of y ...
-    scale_y = np.sqrt(cov[1, 1]) * n_std
 
-    transf = (
-        mpl.transforms.Affine2D()
-        .rotate_deg(45)
-        .scale(scale_x, scale_y)
-        .translate(mean_x, mean_y)
-    )
-
-    ellipse.set_transform(transf + ax.transData)
-    return ax.add_patch(ellipse)
+def angle_between(vector1, vector2):
+    """Returns the angle in radians between two vectors."""
+    vector1 = vector1 / np.linalg.norm(vector1)
+    vector2 = vector2 / np.linalg.norm(vector2)
+    return np.arccos(np.clip(np.dot(vector1, vector2), -1.0, 1.0))
