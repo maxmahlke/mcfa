@@ -2,13 +2,12 @@
 
 """Functions to plot the data and latent space of the MCFA models."""
 
-import colorcet
 from matplotlib.patches import Ellipse
+import matplotlib.transforms as transforms
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import chi2
 
-CLUSTER_COLORS = np.array(colorcet.glasbey_category10)
 CLUSTER_MARKERS = np.array([".", "x", "^", "s", "+"])
 
 
@@ -54,7 +53,6 @@ def plot_data_space(model, Y, clusters=np.array([])):
                     Y[clusters == k, px] if clusters.size else Y[:, px],
                     Y[clusters == k, py] if clusters.size else Y[:, py],
                     marker=CLUSTER_MARKERS[k],
-                    color=CLUSTER_COLORS[k],
                 )
 
             # ------
@@ -66,7 +64,6 @@ def plot_data_space(model, Y, clusters=np.array([])):
                         model.Y_imp[np.where(clusters == k), px],
                         model.Y_imp[np.where(clusters == k), py],
                         marker=CLUSTER_MARKERS[k],
-                        color=CLUSTER_COLORS[k],
                         alpha=0.5,
                     )
 
@@ -85,6 +82,7 @@ def plot_data_space(model, Y, clusters=np.array([])):
                     mean=clusters_mean[k][[px, py]],
                     cov=clusters_cov[k][np.ix_([px, py], [px, py])],
                     ax=ax,
+                    facecolor="none",
                     edgecolor="black",
                     ls="--",
                 )
@@ -145,7 +143,6 @@ def plot_latent_space(model, Z, clusters, mask_imputed=None):
                     Z[idx_cluster, dx],
                     Z[idx_cluster, dy],
                     marker=CLUSTER_MARKERS[k],
-                    color=CLUSTER_COLORS[k],
                     s=30,
                     alpha=[0.5 if np.any(mask_imputed) else 1 for ind in idx_cluster]
                     if mask_imputed is not None
@@ -166,6 +163,7 @@ def plot_latent_space(model, Z, clusters, mask_imputed=None):
                     mean=mean,
                     cov=clusters_cov[k][np.ix_([dx, dy], [dx, dy])],
                     ax=ax,
+                    facecolor="none",
                     edgecolor="black",
                     ls="--",
                 )
@@ -214,63 +212,62 @@ def plot_loss(model):
     plt.show()
 
 
-def confidence_ellipse(mean, cov, ax, probability=0.95, **kwargs):
-    """Plot the confidence ellipse at a given level of the covariance matrix.
+def confidence_ellipse(mean, cov, ax, n_std=2.0, facecolor="none", **kwargs):
+    """
+    Create a plot of the covariance confidence ellipse of *x* and *y*.
+
+    Adapted from https://matplotlib.org/3.5.0/gallery/statistics/confidence_ellipse.html
 
     Parameters
     ----------
     mean : np.ndarray
-        The mean coordinates of the data.
+        The mean of the dataset in the two dimensions to plot.
+
     cov : np.ndarray
-        The covariance matrix of the data
-    ax : matplotlib.axis.Axis
-        The axis instance to add the ellipse to.
-    probability : float
-        The probability level at which to draw the ellipse. Default is 0.95.
+        The covariance of the dataset in the two dimensions to plot.
+
+    ax : matplotlib.axes.Axes
+        The axes object to draw the ellipse into.
+
+    n_std : float
+        The number of standard deviations to determine the ellipse's radiuses.
+
+    **kwargs
+        Forwarded to `~matplotlib.patches.Ellipse`
 
     Returns
     -------
-    matplotlib.axis.Axis
-        The axis instance with the ellipse added.
-
-    Notes
-    -----
-    Further keyword arguments are passed to the matplotlib.patches.Ellipse
-    instance and can be used to change the ellipse appearance.
+    matplotlib.patches.Ellipse
     """
 
-    # ------
-    # Compute error ellipse axes and rotation
-    eigenvalues, eigenvector = np.linalg.eigh(cov)
-
-    # ensure orientation of eigenvector in line with angle definition
-    for i, vector in enumerate(eigenvector):
-        if vector[0] < 0:
-            eigenvector[i] *= -1
-
-    t = np.linspace(0, 2 * np.pi, 100)
-    a = np.sqrt(eigenvalues[0] * chi2(df=2).ppf(probability))
-    b = np.sqrt(eigenvalues[1] * chi2(df=2).ppf(probability))
-
-    t_rot = -angle_between([1, 0], eigenvector[0])
-
-    ellipse = np.array([a * np.cos(t), b * np.sin(t)])
-
-    # 2-D rotation matrix
-    rotation = np.array(
-        [[np.cos(t_rot), -np.sin(t_rot)], [np.sin(t_rot), np.cos(t_rot)]]
+    pearson = cov[0, 1] / np.sqrt(cov[0, 0] * cov[1, 1])
+    # Using a special case to obtain the eigenvalues of this
+    # two-dimensionl dataset.
+    ell_radius_x = np.sqrt(1 + pearson)
+    ell_radius_y = np.sqrt(1 - pearson)
+    ellipse = Ellipse(
+        (0, 0),
+        width=ell_radius_x * 2,
+        height=ell_radius_y * 2,
+        facecolor=facecolor,
+        **kwargs,
     )
-    ell_rot = np.zeros((2, ellipse.shape[1]))
 
-    for i in range(ellipse.shape[1]):
-        ell_rot[:, i] = np.dot(rotation, ellipse[:, i])
+    # Calculating the stdandard deviation of x from
+    # the squareroot of the variance and multiplying
+    # with the given number of standard deviations.
+    scale_x = np.sqrt(cov[0, 0]) * n_std
+    mean_x, mean_y = mean
 
-    elli = Ellipse(mean, 2 * a, 2 * b, np.degrees(t_rot), **kwargs)
-    return ax.add_patch(elli)
+    # calculating the stdandard deviation of y ...
+    scale_y = np.sqrt(cov[1, 1]) * n_std
 
+    transf = (
+        transforms.Affine2D()
+        .rotate_deg(45)
+        .scale(scale_x, scale_y)
+        .translate(mean_x, mean_y)
+    )
 
-def angle_between(vector1, vector2):
-    """Returns the angle in radians between two vectors."""
-    vector1 = vector1 / np.linalg.norm(vector1)
-    vector2 = vector2 / np.linalg.norm(vector2)
-    return np.arccos(np.clip(np.dot(vector1, vector2), -1.0, 1.0))
+    ellipse.set_transform(transf + ax.transData)
+    return ax.add_patch(ellipse)

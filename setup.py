@@ -13,7 +13,6 @@ setup(
         "matplotlib",
         "numpy",
         "tqdm",
-        "colorcet",
         "pandas",
         "pyppca",
         "scipy",
