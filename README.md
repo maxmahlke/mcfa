@@ -19,7 +19,7 @@ Refer to the `docs/documentation.ipynb` for the documentation and
 
 Install from PyPi using `pip`:
 
-     $ pip install space-rocks
+     $ pip install mcfa
 
 The minimum required `python` version is 3.8.
 
