@@ -1,6 +1,7 @@
 # My additions
 mcfa.org
 README.org
+poetry.lock
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

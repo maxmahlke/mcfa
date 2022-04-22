@@ -17,11 +17,11 @@ Refer to the `docs/documentation.ipynb` for the documentation and
 
 # Install
 
-To add the package to your `python` environment, clone the repository and run
+Install from PyPi using `pip`:
 
-    $ pip install --editable .
+     $ pip install space-rocks
 
-in the top-level directory.
+The minimum required `python` version is 3.8.
 
 # Alternatives
 

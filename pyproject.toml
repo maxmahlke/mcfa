@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "mcfa"
+version = "0.1"
+description = "Mixtures of Common Factor Analyzers with missing data"
+authors = ["Max Mahlke <max.mahlke@oca.eu>"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/maxmahlke/mcfa.git"
+documentation = "https://github.com/maxmahlke/mcfa.git"
+repository = "https://github.com/maxmahlke/mcfa.git"
+packages = [{'include' = 'mcfa'}]
+
+[tool.poetry.dependencies]
+python = ">=3.8,<3.11"
+numpy = "^1.21.2"
+matplotlib = "^3.4.3"
+tensorflow = "^2.8.0"
+tensorflow-probability = "^0.16.0"
+pandas = "^1.4.2"
+sklearn = "^0.0"
+pyppca = "^0.0.4"
+tqdm = "^4.64.0"
+scipy = "^1.8.0"
+
+[tool.pytest.ini_options]
+addopts = "-v --cov=mcfa --cov-report html"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
