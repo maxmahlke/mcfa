@@ -167,8 +167,8 @@ class MCFA:
             gamma[k, :, :] = (D_inv - D_inv @ W @ C @ W.T @ D_inv) @ W @ Omega[k, :, :]
 
             Z[k, :, :] = (
-                np.repeat(Xi[[k], :], N).reshape((self.n_factors, N)).T
-                + (Y - (W @ Xi[[k], :].T).T) @ gamma[k, :, :]
+                np.repeat(Xi[k, :], N).reshape((self.n_factors, N)).T
+                + (Y - (W @ Xi[k, :].T).T) @ gamma[k, :, :]
             )
 
         # Compute the cluster-specific scores
@@ -208,6 +208,9 @@ class MCFA:
         np.ndarray
             The responsibility matrix tau, of shape N x g
         """
+        if isinstance(Y, pd.DataFrame):
+            Y = Y.values
+
         _, p = Y.shape
 
         assert (
@@ -587,18 +590,7 @@ class MCFA:
 
         parameters = {}
 
-        for param in [
-            "n_components",
-            "n_factors",
-            "Xi",
-            "pi",
-            "W",
-            "Omega",
-            "Psi",
-            "mu",
-            "loss_training",
-            "loss_validation",
-        ]:
+        for param in ATTRS_TO_STORE:
             parameters[param] = getattr(self, param)
 
         with open(path, "wb") as file_:
@@ -655,7 +647,7 @@ class MCFA:
         ).numpy()
 
         # Cluster moments in latent space are trained model parameters
-        mean_latent = self.Xi
+        mean_latent = self.Xi.numpy()
         cov_latent = Omega
 
         return (
@@ -703,8 +695,8 @@ class MCFA:
             xi = self.Xi[np.argmax(tau[i])]
             sigma = Sigma[np.argmax(tau[i])]
 
-            mu_i_o = O @ self.W.numpy() @ xi + self.mu.numpy()[~np.isnan(y)]
-            mu_i_m = M @ self.W.numpy() @ xi + self.mu.numpy()[np.isnan(y)]
+            mu_i_o = O @ self.W.numpy() @ xi.numpy().T + self.mu.numpy()[~np.isnan(y)]
+            mu_i_m = M @ self.W.numpy() @ xi.numpy().T + self.mu.numpy()[np.isnan(y)]
 
             sigma_i_oo = O @ sigma @ O.T
             sigma_i_om = O @ sigma @ M.T
@@ -736,7 +728,7 @@ class MCFA:
         p = self.Y.shape[1]
         q, g = self.n_factors, self.n_components
 
-        return int((g - 1) + p + q * (p + g) + (g * q * (q + 1)) / 2 - q ** 2)
+        return int((g - 1) + p + q * (p + g) + (g * q * (q + 1)) / 2 - q**2)
 
     def bic(self, Y):
         """Compute the Bayesian Information Criterion of the model given the
@@ -821,16 +813,23 @@ def from_file(path):
     )
 
     # And learned model parameters
-    for param in [
-        "Xi",
-        "pi",
-        "W",
-        "Omega",
-        "Psi",
-        "mu",
-        "loss_training",
-        "loss_validation",
-    ]:
+    for param in ATTRS_TO_STORE:
         setattr(model, param, parameters[param])
 
     return model
+
+
+# Model attributes which are (de)serialized upon model loading / saving
+ATTRS_TO_STORE = [
+    "n_components",
+    "n_factors",
+    "p",
+    "Xi",
+    "pi",
+    "W",
+    "Omega",
+    "Psi",
+    "mu",
+    "loss_training",
+    "loss_validation",
+]
