@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mcfa"
-version = "0.1"
+version = "0.1.1"
 description = "Mixtures of Common Factor Analyzers with missing data"
 authors = ["Max Mahlke <max.mahlke@oca.eu>"]
 license = "MIT"
