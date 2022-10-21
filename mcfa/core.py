@@ -5,6 +5,7 @@ Implementation of a Mixture of Common Factor Analyzers model with
 Stochastic Gradient Descent training.
 """
 
+import os
 import pickle
 import sys
 import warnings
@@ -19,6 +20,9 @@ from tqdm import tqdm
 import pyppca
 
 import mcfa.figures
+
+# Suppress tensorflow warnings
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 # ------
 # Tensforflow device settings
@@ -35,6 +39,30 @@ if len(tf.config.list_physical_devices("GPU")):
 
 # Eager execution is good for debugging tensorflow but slow
 # tf.config.run_functions_eagerly(True)
+
+
+def ensure_numpy_array(array):
+    """Ensure that array is numpy ndarray instead of tensforflow Tensor object.
+
+    Parameters
+    ----------
+    array : np.ndarray, tf.Tensor
+        Array to convert.
+
+    Returns
+    -------
+    np.ndarray
+        Converted arrays.
+    """
+    if isinstance(array, np.ndarray):
+        return array
+    elif isinstance(array, tf.Tensor):
+
+        return array.numpy()
+    else:
+        raise TypeError(
+            f"Passed array in position {i+1} is of type {type(arr)}, expected np.ndarray or tf.Tensor."
+        )
 
 
 class MCFA:
@@ -647,7 +675,7 @@ class MCFA:
         ).numpy()
 
         # Cluster moments in latent space are trained model parameters
-        mean_latent = self.Xi.numpy()
+        mean_latent = ensure_numpy_array(self.Xi)
         cov_latent = Omega
 
         return (
