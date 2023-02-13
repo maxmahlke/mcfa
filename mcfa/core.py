@@ -57,11 +57,10 @@ def ensure_numpy_array(array):
     if isinstance(array, np.ndarray):
         return array
     elif isinstance(array, tf.Tensor):
-
         return array.numpy()
     else:
         raise TypeError(
-            f"Passed array in position {i+1} is of type {type(arr)}, expected np.ndarray or tf.Tensor."
+            f"Passed array is of type '{type(array)}', expected np.ndarray or tf.Tensor."
         )
 
 
@@ -675,7 +674,7 @@ class MCFA:
         ).numpy()
 
         # Cluster moments in latent space are trained model parameters
-        mean_latent = ensure_numpy_array(self.Xi)
+        mean_latent = self.Xi.numpy()  # ensure_numpy_array(self.Xi)
         cov_latent = Omega
 
         return (
