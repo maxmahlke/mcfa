@@ -1,3 +1,7 @@
+# 0.1.3 - 2023-02-14
+- Replace sklearn by scikit-learn
+- Bump dependencies versions
+
 # 0.1.2 - 2023-02-13
 - Bugfix in error message
 
