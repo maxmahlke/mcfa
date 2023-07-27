@@ -11,7 +11,7 @@ repository = "https://github.com/maxmahlke/mcfa.git"
 packages = [{'include' = 'mcfa'}]
 
 [tool.poetry.dependencies]
-python = ">=3.8,<3.11"
+python = ">=3.8"
 numpy = "^1.24.2"
 matplotlib = "^3.7.0"
 tensorflow = "^2.11.0"
