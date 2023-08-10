@@ -1,4 +1,5 @@
 # 0.1.4 - 2023-08-10
+- Loosen upper dependency for python (#2)
 - Loosen dependency requirement on tensorflow-probability (#1)
 
 # 0.1.3 - 2023-02-14
