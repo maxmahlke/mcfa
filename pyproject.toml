@@ -12,13 +12,13 @@ packages = [{'include' = 'mcfa'}]
 
 [tool.poetry.dependencies]
 python = ">=3.8,<3.12"
-numpy = "^1.24.2"
-matplotlib = "^3.7.0"
-tensorflow = "^2.11.0"
+numpy = "^1"
+matplotlib = "^3"
+tensorflow = "^2"
 tensorflow-probability = ">= 0.16.0,<1"
-pandas = "^1.5.3"
+pandas = "^1"
 pyppca = "^0.0.4"
-tqdm = "^4.64.1"
+tqdm = "^4"
 scikit-learn = "^1.2.1"
 
 [tool.pytest.ini_options]
