@@ -11,11 +11,11 @@ repository = "https://github.com/maxmahlke/mcfa.git"
 packages = [{'include' = 'mcfa'}]
 
 [tool.poetry.dependencies]
-python = ">=3.8,<3.12"
+python = ">=3.8"
 numpy = "^1"
 matplotlib = "^3"
 tensorflow = "^2"
-tensorflow-probability = ">= 0.16.0,<1"
+tensorflow-probability = ">= 0.21.0,<1"
 pandas = "^1"
 pyppca = "^0.0.4"
 tqdm = "^4"
