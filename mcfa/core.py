@@ -12,7 +12,6 @@ import warnings
 
 import numpy as np
 import pandas as pd
-import scipy
 from sklearn import decomposition, mixture
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -181,16 +180,13 @@ class MCFA:
 
         # Compute the scores per cluster
         for k in range(self.n_components):
-
             # Check if covariance matrix is ill-coniditioned
             if np.linalg.cond(Omega[k, :, :]) > 1e4:
                 epsilon = 1e-5
                 Omega[k] = Omega[k] + I * epsilon
 
             # using the Woodbury Identity for matrix inversion
-            C = scipy.linalg.solve(
-                scipy.linalg.solve(Omega[k, :, :], I) + W.T @ D_inv @ W, I
-            )
+            C = np.linalg.solve(np.linalg.solve(Omega[k, :, :], I) + W.T @ D_inv @ W, I)
             gamma[k, :, :] = (D_inv - D_inv @ W @ C @ W.T @ D_inv) @ W @ Omega[k, :, :]
 
             Z[k, :, :] = (
@@ -374,7 +370,6 @@ class MCFA:
 
         # Now we create the subsets of equal missingness patterns for each dataset
         for i, data in enumerate([data_training, data_validation]):
-
             # The datasets for training cannot contain NaNs, so we fill them with 0
             # These will be filtered out later with the missingness masks
             data_0 = data.copy()
@@ -390,7 +385,6 @@ class MCFA:
 
             # Build list of data subsets with equal missingness pattern.
             for j, hash_ in enumerate(set(missing["hash"])):
-
                 # Create subset with the same missingness pattern
                 data_batch = data_0[missing.loc[missing.hash == hash_].index, :]
 
@@ -452,13 +446,11 @@ class MCFA:
 
         progress = tqdm(range(self.n_epochs), desc="Training ", unit="epoch")
         for epoch in progress:
-
             # LL per dataset and training batch
             ll_train = []
             ll_valid = []
 
             for batch_training in self.training_set:
-
                 # Give a lower probability of training with batches with low completeness
                 missing_bins = len(np.where(batch_training.numpy()[0, :] == 0)[0])
                 skip_probability = missing_bins / self.p
@@ -796,7 +788,6 @@ class MCFA:
 
         for zi in tau:
             for g in range(self.n_components):
-
                 zig = zi[g] if zi[g] != 0 else 1e-18
                 entropy -= zig * np.log(zig)
 
