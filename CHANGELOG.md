@@ -1,3 +1,7 @@
+# 0.1.5 - 2024-01-16
+- Add inverse-transform to create data by sampling latent space
+- Bump pandas major version requirement
+
 # 0.1.4 - 2023-08-10
 - Loosen upper dependency for python (#2)
 - Loosen dependency requirement on tensorflow-probability (#1)
