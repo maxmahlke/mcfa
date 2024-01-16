@@ -215,6 +215,8 @@ class MCFA:
 
     def inverse_transform(self, latent_scores):
         """Compute the data given the latent scores."""
+        data = self.mu + np.dot(latent_scores, self.W.numpy().T)
+        return data
 
     def predict_proba(self, Y):
         """Compute the responsibility matrix tau, giving the probability for each sample to
