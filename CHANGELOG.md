@@ -1,3 +1,6 @@
+# 0.1.6 - 2024-12-18
+- Ease dependency version requirements
+
 # 0.1.5 - 2024-01-16
 - Add inverse-transform to create data by sampling latent space
 - Bump pandas major version requirement
