@@ -38,7 +38,7 @@ if len(tf.config.list_physical_devices("GPU")):
     tf.config.experimental.set_memory_growth(device=gpu[0], enable=True)
 
 # Eager execution is good for debugging tensorflow but slow
-# tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(True)
 
 
 def ensure_numpy_array(array):
