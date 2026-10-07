@@ -1,3 +1,7 @@
+# 0.1.7 - 2026-10-07
+- Set tf execution mode to eager to avoid deadlocks on MacOS silicon
+- Do not override user's tf logging level
+
 # 0.1.6 - 2024-12-18
 - Ease dependency version requirements
 
