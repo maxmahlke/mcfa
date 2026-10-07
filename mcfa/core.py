@@ -20,8 +20,9 @@ import pyppca
 
 import mcfa.figures
 
-# Suppress tensorflow warnings
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+# Suppress tensorflow warnings if not set by user
+if "TF_CPP_MIN_LOG_LEVEL" not in os.environ:
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 # ------
 # Tensforflow device settings
